@@ -1,0 +1,11 @@
+{
+  "name": "ngo-impact-commons",
+  "version": "1.0.0",
+  "description": "NGO Impact Data Commons — AI-Assisted Transparency, Fraud Detection & Cryptographic Ledger Platform",
+  "scripts": {
+    "dev:server": "cd server && npm run dev",
+    "dev:client": "cd client && npm run dev",
+    "db:seed": "cd server && npm run db:seed",
+    "build": "cd server && npm run build && cd ../client && npm run build"
+  }
+}

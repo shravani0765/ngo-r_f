@@ -1,0 +1,259 @@
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  name      String
+  role      String   // ADMIN, NGO, DONOR, PUBLIC
+  phone     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ngo                   NGO?
+  donations             Donation[]
+  auditLogs             AuditLog[]
+  notifications         Notification[]
+}
+
+model NGO {
+  id               String   @id @default(uuid())
+  userId           String   @unique
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name             String
+  regNum           String   @unique
+  pan              String
+  certificate12A   String
+  certificate80G   String
+  csrReg           String?
+  address          String
+  state            String
+  district         String
+  phone            String
+  email            String
+  website          String?
+  mission          String
+  areaOfWork       String
+  establishedYear  Int
+  employees        Int      @default(0)
+  volunteers       Int      @default(0)
+  status           String   @default("PENDING") // PENDING, VERIFIED, REJECTED, REQUIRES_CORRECTION
+  transparencyScore Int     @default(50)
+  fraudRiskScore    Int     @default(10)
+  verifiedAt       DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  documents            NGODocument[]
+  govVerification      GovVerification?
+  projects             Project[]
+  beneficiaries        Beneficiary[]
+  donations            Donation[]
+  expenses             Expense[]
+  blockchainBlocks     BlockchainBlock[]
+  fraudAlerts          FraudAlert[]
+  transparencyScores   TransparencyScore[]
+  whistleblowerReports WhistleblowerReport[]
+}
+
+model NGODocument {
+  id                 String    @id @default(uuid())
+  ngoId              String
+  ngo                NGO       @relation(fields: [ngoId], references: [id], onDelete: Cascade)
+  docType            String    // REGISTRATION, PAN, 12A, 80G, AUDIT_REPORT, ANNUAL_REPORT, BANK_DOC
+  fileName           String
+  filePath           String
+  hash               String
+  status             String    @default("PENDING") // PENDING, VERIFIED, REJECTED, REQUIRES_CORRECTION
+  verificationStatus String    @default("INTEGRITY_VERIFIED")
+  uploadDate         DateTime  @default(now())
+  verifiedAt         DateTime?
+}
+
+model GovVerification {
+  id             String    @id @default(uuid())
+  ngoId          String    @unique
+  ngo            NGO       @relation(fields: [ngoId], references: [id], onDelete: Cascade)
+  regNumStatus   String    @default("VERIFIED") // VERIFIED, PENDING, FAILED
+  panStatus      String    @default("VERIFIED")
+  cert12AStatus  String    @default("VERIFIED")
+  cert80GStatus  String    @default("VERIFIED")
+  overallStatus  String    @default("VERIFIED") // VERIFIED, PENDING, FAILED, REQUIRES_REVIEW
+  verifiedAt     DateTime  @default(now())
+  notes          String?
+}
+
+model Project {
+  id                   String    @id @default(uuid())
+  ngoId                String
+  ngo                  NGO       @relation(fields: [ngoId], references: [id], onDelete: Cascade)
+  title                String
+  description          String
+  category             String
+  sdgGoals             String    // JSON string array e.g. ["SDG 4", "SDG 10"]
+  location             String
+  state                String
+  district             String
+  startDate            String
+  endDate              String
+  budget               Float
+  expectedBeneficiaries Int
+  actualBeneficiaries   Int       @default(0)
+  status               String    @default("ACTIVE") // DRAFT, SUBMITTED, UNDER_REVIEW, VERIFIED, ACTIVE, COMPLETED, REJECTED
+  lat                  Float?
+  lng                  Float?
+  image                String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  beneficiaries        Beneficiary[]
+  donations            Donation[]
+  expenses             Expense[]
+  blockchainBlocks     BlockchainBlock[]
+  communityVerifications CommunityVerification[]
+  whistleblowerReports   WhistleblowerReport[]
+}
+
+model Beneficiary {
+  id              String   @id @default(uuid())
+  projectId       String
+  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  ngoId           String
+  ngo             NGO      @relation(fields: [ngoId], references: [id], onDelete: Cascade)
+  beneficiaryCode String   @unique
+  name            String
+  age             Int
+  gender          String
+  location        String
+  program         String
+  supportType     String
+  duplicateRisk   String   @default("LOW") // LOW, MEDIUM, HIGH
+  duplicateDetails String?
+  registrationDate DateTime @default(now())
+}
+
+model Donation {
+  id            String   @id @default(uuid())
+  donorId       String
+  donor         User     @relation(fields: [donorId], references: [id], onDelete: Cascade)
+  ngoId         String
+  ngo           NGO      @relation(fields: [ngoId], references: [id], onDelete: Cascade)
+  projectId     String
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  amount        Float
+  date          DateTime @default(now())
+  purpose       String
+  paymentStatus String   @default("COMPLETED")
+  txnId         String   @unique
+  blockId       String?  @unique
+  block         BlockchainBlock? @relation(fields: [blockId], references: [id])
+}
+
+model Expense {
+  id          String   @id @default(uuid())
+  ngoId       String
+  ngo         NGO      @relation(fields: [ngoId], references: [id], onDelete: Cascade)
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  category    String
+  amount      Float
+  date        DateTime @default(now())
+  description String
+  receiptUrl  String?
+  approvedBy  String   @default("NGO Admin")
+}
+
+model BlockchainBlock {
+  id          String   @id @default(uuid())
+  blockNumber Int      @unique
+  prevHash    String
+  currentHash String
+  txnId       String   @unique
+  amount      Float
+  donorId     String
+  ngoId       String
+  ngo         NGO      @relation(fields: [ngoId], references: [id], onDelete: Cascade)
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  timestamp   DateTime @default(now())
+
+  donation    Donation?
+}
+
+model FraudAlert {
+  id             String   @id @default(uuid())
+  ngoId          String
+  ngo            NGO      @relation(fields: [ngoId], references: [id], onDelete: Cascade)
+  riskScore      Int
+  riskLevel      String   // LOW, MEDIUM, HIGH
+  reason         String
+  affectedRecord String
+  status         String   @default("UNRESOLVED") // UNRESOLVED, INVESTIGATING, RESOLVED
+  date           DateTime @default(now())
+}
+
+model TransparencyScore {
+  id            String   @id @default(uuid())
+  ngoId         String
+  ngo           NGO      @relation(fields: [ngoId], references: [id], onDelete: Cascade)
+  overallScore  Int
+  categoryGrade String   // EXCELLENT, GOOD, MODERATE, LOW
+  breakdownJson String   // JSON string of category breakdown
+  lastUpdated   DateTime @default(now())
+}
+
+model WhistleblowerReport {
+  id          String   @id @default(uuid())
+  trackingCode String  @unique
+  ngoId       String?
+  ngo         NGO?     @relation(fields: [ngoId], references: [id], onDelete: SetNull)
+  projectId   String?
+  project     Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  category    String
+  description String
+  evidenceUrl String?
+  status      String   @default("SUBMITTED") // SUBMITTED, UNDER_INVESTIGATION, RESOLVED, DISMISSED
+  createdAt   DateTime @default(now())
+}
+
+model CommunityVerification {
+  id          String   @id @default(uuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  observerName String
+  location    String
+  observation String
+  imageUrl    String?
+  status      String   @default("PENDING") // PENDING, VERIFIED, REJECTED
+  createdAt   DateTime @default(now())
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userRole  String
+  action    String
+  module    String
+  recordId  String?
+  details   String
+  timestamp DateTime @default(now())
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  message   String
+  type      String   @default("INFO") // INFO, SUCCESS, WARNING, DANGER
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
