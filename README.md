@@ -1,88 +1,182 @@
-
 # NGO Impact Data Commons
 
 > **"Verified Impact. Transparent Funds. Trusted NGOs."**
 
-A production-ready full-stack AI-assisted platform for NGO identity verification, SHA-256 document hashing, cryptographic donation tracking, duplicate beneficiary detection, and open transparency reporting.
+A full-stack platform for NGO verification, tamper-evident donation tracking, duplicate
+beneficiary detection, and public transparency reporting.
 
 ---
 
-## Key Features
+## Quick start
 
-1. **Role-Based Authentication**: Built-in support for NGO, Admin, Donor, and Public roles with one-click demo login presets.
-2. **SHA-256 Document Hashing**: Computes real-time cryptographic SHA-256 checksums on uploaded audit reports and tax certificates, with instant tamper detection.
-3. **Mock Government Verification Service**: API simulation checking NGO Darpan, Income Tax 12A/80G, and PAN registration credentials against government databases.
-4. **Cryptographic Donation Ledger**: Blockchain-style immutable ledger where each donation generates a block payload (`currentHash = SHA256(previousHash + payload)`), with automated chain integrity verification.
-5. **AI Impact Integrity & Fraud Detection Engine**: Computes Fraud Risk Scores (0-100), Transparency Scores (0-100), auto-tags UN Sustainable Development Goals (SDGs 1-17), and detects duplicate beneficiary entries.
-6. **Visual Fund Flow & SROI Analytics**: Interactive SVG fund flow tracking money movement from Donor → NGO → Project → Expense → Beneficiary with Social Return on Investment (SROI 1.85:1) calculations.
-7. **Admin Review & Audit Log System**: Comprehensive auditor control panel with real-time NGO approval, whistleblower triage, and immutable system event logs.
-8. **Public Directory & Developer REST API**: Publicly searchable registry of verified NGOs, macro impact analytics, and interactive API documentation with copyable JSON response schemas.
-9. **NGO Impact Assistant (AI Chatbot)**: Floating AI chatbot widget answering platform navigation, verification rules, and tax compliance queries.
+You need Node.js 18+. Three commands, in order.
 
----
+### 1. Set up the database (first run only)
 
-## Technology Stack
+```bash
+cd server
+npm install
+npx prisma db push      # create the SQLite database
+npm run db:seed         # load demo organisations, projects and donations
+```
 
-- **Frontend**: React.js, TypeScript, Tailwind CSS, Lucide React, Recharts, React Router
-- **Backend**: Node.js, Express.js, TypeScript
-- **Database & ORM**: SQLite, Prisma ORM
-- **Cryptography & Hashing**: SHA-256 (`crypto` module)
-- **Authentication**: JWT, bcrypt password hashing
+### 2. Start the backend (port 5001)
 
----
-
-## Demo Login Credentials
-
-For instant demonstration, use the pre-configured accounts:
-
-| Role | Email | Password |
-|---|---|---|
-| **Admin** | `admin@ngocommons.demo` | `Admin@123` |
-| **NGO** | `ngo@ngocommons.demo` | `NGO@123` |
-| **Donor** | `donor@ngocommons.demo` | `Donor@123` |
-| **Public** | `public@ngocommons.demo` | `Public@123` |
-
----
-
-## Quick Start & Running Locally
-
-### 1. Start Backend Server (Port 5000)
 ```bash
 cd server
 npm run dev
 ```
 
-### 2. Start Frontend App (Port 5173)
+### 3. Start the frontend (port 5173)
+
 ```bash
 cd client
+npm install
 npm run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173) in your browser.
+Open **http://localhost:5173**.
+
+> If you skip `npm run db:seed`, the app will load but every page will be empty —
+> that is expected, not a bug. The platform never invents figures it does not have.
 
 ---
 
-## Architecture Diagram & Flow
+## Demo accounts
+
+The sign-in page has one-click buttons for each of these.
+
+| Role | Email | Password |
+|---|---|---|
+| **Auditor (admin)** | `admin@ngocommons.demo` | `Admin@123` |
+| **NGO** | `ngo@ngocommons.demo` | `NGO@1234` |
+| **Donor** | `donor@ngocommons.demo` | `Donor@123` |
+| **Public** | `public@ngocommons.demo` | `Public@123` |
+
+Admin accounts cannot be created through sign-up — they exist only in the seed.
+
+---
+
+## What it does
+
+1. **Role-based access.** NGO, Donor, Public and Auditor roles. Every write is checked
+   against the signed-in account, so an organisation can only edit its own records.
+
+2. **Government credential check.** Simulates NGO Darpan, PAN, 12A and 80G lookups. Passing
+   the check is not enough on its own — a human auditor still approves an organisation
+   before it becomes publicly visible.
+
+3. **Document integrity.** A SHA-256 digest is computed over each document's contents and
+   stored alongside it. The "check it is unchanged" action re-hashes the stored payload and
+   compares, so alteration is genuinely detectable.
+
+4. **Tamper-evident donation ledger.** Each donation is written as a record containing the
+   previous record's hash (`currentHash = SHA256(blockNumber : prevHash : txnId : amount :
+   donorId : ngoId : projectId : timestamp)`). Editing any past record breaks every link
+   after it. Anyone can re-verify the whole chain from the Fund Records page.
+
+5. **Impact Integrity Engine.** A transparent, rule-based anomaly scan producing a fraud
+   risk score (0–100) from seven signals: government status, document backlog, duplicate
+   beneficiaries, spending vs income, geographic consistency of evidence, community
+   disputes, and beneficiary over-reporting. Every flag states its reason and its fix.
+
+6. **Duplicate beneficiary detection.** Each person gets a unique ID. New records are scored
+   against existing ones — including other organisations' — on name similarity, location,
+   age and gender. High-confidence duplicates are blocked at save time with an explicit
+   override, rather than silently recorded.
+
+7. **Geo-tagged field evidence.** Photos carry coordinates and a before/progress/after
+   phase. Distance from the project's declared site is computed on upload and flagged when
+   implausible.
+
+8. **Transparency score (0–100).** Government registration (25) + documents reviewed (25) +
+   money trail (25) + project evidence (15) + community feedback (10), minus up to 20 for
+   open risk flags. Recomputed automatically whenever underlying data changes.
+
+9. **Community verification.** Anyone who was there can confirm or dispute what an NGO
+   claims about a project. Disputes reduce the transparency score and alert an auditor.
+
+10. **Anonymous reporting.** Concerns can be submitted with no account and nothing recorded
+    about the reporter. A tracking code lets the reporter follow the outcome.
+
+11. **Notifications and audit log.** Organisations are told when documents are accepted,
+    changes are needed, or risk flags are raised. All privileged actions are logged.
+
+12. **Open REST API.** `/api/public/ngos`, `/api/public/projects`, `/api/public/ledger`,
+    `/api/public/statistics` — read-only JSON, no key required.
+
+---
+
+## Technology
+
+- **Frontend:** React 18, TypeScript, Tailwind CSS, React Router
+- **Backend:** Node.js, Express, TypeScript
+- **Database:** SQLite via Prisma ORM
+- **Hashing:** SHA-256 (Node `crypto`)
+- **Auth:** JWT with bcrypt password hashing
+
+---
+
+## Flow
 
 ```
-USER REGISTRATION / LOGIN
+REGISTER / SIGN IN
        │
        ▼
-DOCUMENT UPLOAD & SHA-256 HASHING
+UPLOAD DOCUMENTS  ──▶  SHA-256 DIGEST STORED
        │
        ▼
-GOVERNMENT API VERIFICATION (/api/government/verify)
+GOVERNMENT CREDENTIAL CHECK  (/api/government/verify)
        │
        ▼
-AI FRAUD DETECTION / RISK SCORING
+IMPACT INTEGRITY ENGINE  ──▶  RISK SCORE + FLAGS
        │
        ▼
-ADMIN AUDITOR REVIEW & APPROVAL
+AUDITOR REVIEW  ──▶  APPROVED = PUBLICLY VISIBLE
        │
        ▼
-CRYPTOGRAPHIC DONATION LEDGER (SHA-256 BLOCK CHAIN)
+DONATIONS  ──▶  HASH-CHAINED LEDGER RECORD
        │
        ▼
-PUBLIC TRANSPARENCY PORTAL & SROI ANALYTICS
+PUBLIC DIRECTORY, IMPACT DASHBOARD, OPEN API
 ```
 
+---
+
+## Scope and limitations
+
+Stated plainly, so the implementation is not mistaken for something it is not.
+
+- **The ledger is a hash chain, not a blockchain.** It is tamper-evident and independently
+  re-verifiable, but it runs in a single database. There are no distributed nodes, no
+  consensus mechanism and no smart contracts. This avoids the transaction cost, latency and
+  accessibility problems identified across the literature survey, at the cost of
+  decentralisation.
+
+- **SDG classification is rule-based**, matching keywords across all 17 goals with a
+  confidence weighting. It is not a trained language model.
+
+- **The government verification service is simulated.** It applies format and checksum rules
+  to registration numbers, PAN, 12A and 80G values. It does not call live government APIs.
+
+- **Documents are stored as text payloads rather than uploaded binary files.** The hashing,
+  storage and integrity-verification logic is real; only the file transport is simplified.
+
+- **SQLite is used for portability.** The Prisma schema moves to PostgreSQL by changing the
+  datasource provider and connection string.
+
+- **Demo credentials are committed** in `server/prisma/seed.ts` for evaluation convenience.
+  Set a strong `JWT_SECRET` and remove the seed accounts before any public deployment; the
+  server refuses to start in production without a real secret.
+
+---
+
+## Configuration
+
+Optional `server/.env`:
+
+```
+PORT=5001
+JWT_SECRET=<at least 16 characters — required when NODE_ENV=production>
+CORS_ORIGINS=http://localhost:5173
+```
