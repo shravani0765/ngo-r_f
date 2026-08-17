@@ -5,8 +5,10 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 import { NGO } from '../types';
+import { useToast } from '../context/ToastContext';
 
 export const AdminDashboard: React.FC = () => {
+  const { showToast } = useToast();
   const [ngos, setNgos] = useState<NGO[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedNgo, setSelectedNgo] = useState<NGO | null>(null);
@@ -43,9 +45,10 @@ export const AdminDashboard: React.FC = () => {
         transparencyScore: 92,
         notes: 'Auditor approved after 5-step compliance check.'
       });
+      showToast('NGO granted VERIFIED status successfully!', 'success');
       fetchAdminData();
     } catch (err) {
-      console.error(err);
+      showToast('Failed to approve NGO status', 'error');
     } finally {
       setActionLoading(false);
     }
@@ -58,9 +61,10 @@ export const AdminDashboard: React.FC = () => {
         status: 'REJECTED',
         notes: 'Document mismatch detected.'
       });
+      showToast('NGO application updated to REJECTED status', 'warning');
       fetchAdminData();
     } catch (err) {
-      console.error(err);
+      showToast('Failed to reject NGO status', 'error');
     } finally {
       setActionLoading(false);
     }

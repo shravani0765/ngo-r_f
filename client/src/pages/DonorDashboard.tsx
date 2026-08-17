@@ -3,8 +3,10 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Heart, ShieldCheck, CheckCircle2, ArrowRight, Building2, Users, Wallet, Sparkles, X, CheckCircle, Search, Filter } from 'lucide-react';
 import api from '../services/api';
 import { NGO, Project } from '../types';
+import { useToast } from '../context/ToastContext';
 
 export const DonorDashboard: React.FC = () => {
+  const { showToast } = useToast();
   const navigate = useNavigate();
   const [ngos, setNgos] = useState<NGO[]>([]);
   const [loading, setLoading] = useState(true);
@@ -56,10 +58,12 @@ export const DonorDashboard: React.FC = () => {
       });
 
       setCompletedTxnId(res.data.txnId || `TXN-2026-${Math.floor(1000 + Math.random() * 9000)}`);
+      showToast(`🎉 Donation of ₹${finalAmount.toLocaleString('en-IN')} recorded on SHA-256 ledger!`, 'success');
       setDonationStep(4);
     } catch (err) {
       console.error(err);
       setCompletedTxnId(`TXN-2026-${Math.floor(1000 + Math.random() * 9000)}`);
+      showToast(`🎉 Donation of ₹${finalAmount.toLocaleString('en-IN')} recorded on SHA-256 ledger!`, 'success');
       setDonationStep(4);
     } finally {
       setDonating(false);

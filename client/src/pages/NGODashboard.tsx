@@ -6,9 +6,11 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 import { NGO } from '../types';
+import { useToast } from '../context/ToastContext';
 
 export const NGODashboard: React.FC = () => {
   const { user } = useAuth();
+  const { showToast } = useToast();
   const [activeTab, setActiveTab] = useState<'overview' | 'profile' | 'documents' | 'projects' | 'beneficiaries' | 'expenses'>('overview');
   const [ngo, setNgo] = useState<NGO | null>(null);
   const [loading, setLoading] = useState(true);
@@ -95,9 +97,10 @@ export const NGODashboard: React.FC = () => {
         certificate80G: ngo.certificate80G
       });
       setGovResult(res.data);
+      showToast('Government database verification completed successfully!', 'success');
       fetchNgoData();
     } catch (err) {
-      console.error(err);
+      showToast('Verification failed with government database', 'error');
     } finally {
       setGovVerifying(false);
     }
@@ -114,10 +117,11 @@ export const NGODashboard: React.FC = () => {
         fileName,
         content: `${fileName}_${Date.now()}`
       });
+      showToast(`Document "${fileName}" uploaded & cryptographic SHA-256 hash computed!`, 'success');
       setFileName('');
       fetchNgoData();
     } catch (err) {
-      console.error(err);
+      showToast('Failed to upload document', 'error');
     } finally {
       setDocUploading(false);
     }
@@ -127,8 +131,13 @@ export const NGODashboard: React.FC = () => {
     try {
       const res = await api.post(`/documents/${docId}/verify-integrity`);
       setHashVerificationResult(res.data);
+      if (res.data.isTampered) {
+        showToast('⚠️ WARNING: Document hash mismatch / tamper detected!', 'error');
+      } else {
+        showToast('✅ Document SHA-256 integrity verified! Hash is authentic.', 'success');
+      }
     } catch (err) {
-      console.error(err);
+      showToast('Integrity verification failed', 'error');
     }
   };
 
@@ -158,6 +167,7 @@ export const NGODashboard: React.FC = () => {
         ngoId: ngo.id,
         sdgGoals: sdgText
       });
+      showToast(`Project "${newProject.title}" created with AI SDG tagging!`, 'success');
       setNewProject({
         title: '',
         description: '',
@@ -170,7 +180,7 @@ export const NGODashboard: React.FC = () => {
       });
       fetchNgoData();
     } catch (err) {
-      console.error(err);
+      showToast('Failed to create project', 'error');
     } finally {
       setProjectCreating(false);
     }

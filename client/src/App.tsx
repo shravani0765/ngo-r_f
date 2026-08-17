@@ -1,6 +1,8 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { ToastProvider } from './context/ToastContext';
+import { QuickPersonaBar } from './components/QuickPersonaBar';
 import { Navbar } from './components/Navbar';
 import { Sidebar } from './components/Sidebar';
 import { AIChatbot } from './components/AIChatbot';
@@ -24,7 +26,7 @@ import { WhistleblowerPage } from './pages/WhistleblowerPage';
 // Protected Route Guard
 const ProtectedRoute: React.FC<{ children: React.ReactNode; allowedRoles?: string[] }> = ({ children, allowedRoles }) => {
   const { user, loading } = useAuth();
-  if (loading) return <div className="p-8 text-center text-xs text-slate-500">Authenticating...</div>;
+  if (loading) return <div className="p-8 text-center text-xs font-semibold text-slate-500 animate-pulse">Authenticating workspace...</div>;
   if (!user) return <Navigate to="/login" replace />;
   if (allowedRoles && !allowedRoles.includes(user.role)) return <Navigate to="/" replace />;
   return <>{children}</>;
@@ -36,11 +38,12 @@ const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ children }) 
   const role = user?.role || 'PUBLIC';
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50">
+    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 selection:bg-blue-500 selection:text-white">
+      <QuickPersonaBar />
       <Navbar />
       <div className="flex flex-1">
         {user && <Sidebar role={role} />}
-        <main className="flex-1 p-4 sm:p-6 max-w-7xl mx-auto w-full">
+        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full transition-all">
           {children}
         </main>
       </div>
@@ -53,47 +56,49 @@ const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ children }) 
 export function App() {
   return (
     <AuthProvider>
-      <Router>
-        <DashboardLayout>
-          <Routes>
-            <Route path="/" element={<LandingPage />} />
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/register" element={<RegisterPage />} />
-            
-            {/* Public Routes */}
-            <Route path="/public/directory" element={<PublicDirectory />} />
-            <Route path="/public/ngos/:id" element={<NGOProfilePage />} />
-            <Route path="/public/impact" element={<PublicImpactDashboard />} />
-            <Route path="/ledger" element={<LedgerPage />} />
-            <Route path="/system-flow" element={<SystemFlowPage />} />
-            <Route path="/api-docs" element={<ApiDocsPage />} />
-            <Route path="/whistleblower" element={<WhistleblowerPage />} />
+      <ToastProvider>
+        <Router>
+          <DashboardLayout>
+            <Routes>
+              <Route path="/" element={<LandingPage />} />
+              <Route path="/login" element={<LoginPage />} />
+              <Route path="/register" element={<RegisterPage />} />
+              
+              {/* Public Routes */}
+              <Route path="/public/directory" element={<PublicDirectory />} />
+              <Route path="/public/ngos/:id" element={<NGOProfilePage />} />
+              <Route path="/public/impact" element={<PublicImpactDashboard />} />
+              <Route path="/ledger" element={<LedgerPage />} />
+              <Route path="/system-flow" element={<SystemFlowPage />} />
+              <Route path="/api-docs" element={<ApiDocsPage />} />
+              <Route path="/whistleblower" element={<WhistleblowerPage />} />
 
-            {/* NGO Dashboard Routes */}
-            <Route path="/ngo/*" element={
-              <ProtectedRoute allowedRoles={['NGO', 'ADMIN']}>
-                <NGODashboard />
-              </ProtectedRoute>
-            } />
+              {/* NGO Dashboard Routes */}
+              <Route path="/ngo/*" element={
+                <ProtectedRoute allowedRoles={['NGO', 'ADMIN']}>
+                  <NGODashboard />
+                </ProtectedRoute>
+              } />
 
-            {/* Admin Dashboard Routes */}
-            <Route path="/admin/*" element={
-              <ProtectedRoute allowedRoles={['ADMIN']}>
-                <AdminDashboard />
-              </ProtectedRoute>
-            } />
+              {/* Admin Dashboard Routes */}
+              <Route path="/admin/*" element={
+                <ProtectedRoute allowedRoles={['ADMIN']}>
+                  <AdminDashboard />
+                </ProtectedRoute>
+              } />
 
-            {/* Donor Dashboard Routes */}
-            <Route path="/donor/*" element={
-              <ProtectedRoute allowedRoles={['DONOR', 'ADMIN']}>
-                <DonorDashboard />
-              </ProtectedRoute>
-            } />
+              {/* Donor Dashboard Routes */}
+              <Route path="/donor/*" element={
+                <ProtectedRoute allowedRoles={['DONOR', 'ADMIN']}>
+                  <DonorDashboard />
+                </ProtectedRoute>
+              } />
 
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </DashboardLayout>
-      </Router>
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </DashboardLayout>
+        </Router>
+      </ToastProvider>
     </AuthProvider>
   );
 }
