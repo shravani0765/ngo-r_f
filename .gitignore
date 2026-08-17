@@ -30,3 +30,7 @@ yarn-error.log*
 
 # Vite timestamp temporary files
 vite.config.ts.timestamp-*
+
+# Local runtime logs
+server/server.log
+server/test.log

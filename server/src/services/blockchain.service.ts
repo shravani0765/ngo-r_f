@@ -1,5 +1,8 @@
 import crypto from 'crypto';
 
+/** prevHash of the first block — there is nothing before it. */
+export const GENESIS_HASH = '0'.repeat(64);
+
 export interface BlockData {
   blockNumber: number;
   prevHash: string;
@@ -11,47 +14,77 @@ export interface BlockData {
   timestamp: string | Date;
 }
 
+export interface ChainVerification {
+  isValid: boolean;
+  errorBlockIndex?: number;
+  brokenBlockNumber?: number;
+  message: string;
+  checkedCount: number;
+}
+
 export class BlockchainService {
   /**
-   * Calculates SHA-256 hash for a block payload
+   * SHA-256 over the block's fields plus the previous block's hash, which is
+   * what chains the records together: editing any past record changes its hash
+   * and breaks every link after it.
    */
   static calculateHash(data: BlockData): string {
-    const payload = `${data.blockNumber}:${data.prevHash}:${data.txnId}:${data.amount}:${data.donorId}:${data.ngoId}:${data.projectId}:${new Date(data.timestamp).toISOString()}`;
-    return crypto.createHash('sha256').update(payload).digest('hex');
+    const payload = [
+      data.blockNumber,
+      data.prevHash,
+      data.txnId,
+      data.amount,
+      data.donorId,
+      data.ngoId,
+      data.projectId,
+      new Date(data.timestamp).toISOString()
+    ].join(':');
+
+    return crypto.createHash('sha256').update(payload, 'utf8').digest('hex');
   }
 
-  /**
-   * Verifies that each block's currentHash matches SHA-256 calculation and prevHash links correctly
-   */
-  static verifyChainIntegrity(blocks: Array<BlockData & { currentHash: string }>): { isValid: boolean; errorBlockIndex?: number; message: string } {
+  /** Re-computes every hash and checks each block still points at the last one. */
+  static verifyChainIntegrity(
+    blocks: Array<BlockData & { currentHash: string }>
+  ): ChainVerification {
     if (blocks.length === 0) {
-      return { isValid: true, message: 'Ledger is empty' };
+      return {
+        isValid: true,
+        checkedCount: 0,
+        message: 'No donations recorded yet, so there is nothing to check.'
+      };
     }
 
     for (let i = 0; i < blocks.length; i++) {
-      const currentBlock = blocks[i];
-      const recalculatedHash = this.calculateHash(currentBlock);
+      const block = blocks[i];
+      const recalculated = this.calculateHash(block);
 
-      if (recalculatedHash !== currentBlock.currentHash) {
+      if (recalculated !== block.currentHash) {
         return {
           isValid: false,
           errorBlockIndex: i,
-          message: `Block #${currentBlock.blockNumber} hash mismatch! Computed ${recalculatedHash.substring(0, 10)}... vs stored ${currentBlock.currentHash.substring(0, 10)}...`
+          brokenBlockNumber: block.blockNumber,
+          checkedCount: blocks.length,
+          message: `Record #${block.blockNumber} has been changed since it was written. Its fingerprint no longer matches.`
         };
       }
 
-      if (i > 0) {
-        const previousBlock = blocks[i - 1];
-        if (currentBlock.prevHash !== previousBlock.currentHash) {
-          return {
-            isValid: false,
-            errorBlockIndex: i,
-            message: `Block #${currentBlock.blockNumber} prevHash does not match Block #${previousBlock.blockNumber} currentHash!`
-          };
-        }
+      const expectedPrev = i === 0 ? GENESIS_HASH : blocks[i - 1].currentHash;
+      if (block.prevHash !== expectedPrev) {
+        return {
+          isValid: false,
+          errorBlockIndex: i,
+          brokenBlockNumber: block.blockNumber,
+          checkedCount: blocks.length,
+          message: `Record #${block.blockNumber} no longer links to the record before it. A record may have been removed or inserted.`
+        };
       }
     }
 
-    return { isValid: true, message: 'Cryptographic ledger integrity verified. All hashes valid and unbroken.' };
+    return {
+      isValid: true,
+      checkedCount: blocks.length,
+      message: `All ${blocks.length} donation record${blocks.length === 1 ? '' : 's'} are intact and unchanged.`
+    };
   }
 }

@@ -70,9 +70,13 @@ model NGODocument {
   docType            String    // REGISTRATION, PAN, 12A, 80G, AUDIT_REPORT, ANNUAL_REPORT, BANK_DOC
   fileName           String
   filePath           String
+  // The exact bytes the hash was computed over. Kept so integrity checks can
+  // genuinely re-hash the stored payload instead of echoing the stored digest.
+  content            String
   hash               String
   status             String    @default("PENDING") // PENDING, VERIFIED, REJECTED, REQUIRES_CORRECTION
   verificationStatus String    @default("INTEGRITY_VERIFIED")
+  reviewNotes        String?
   uploadDate         DateTime  @default(now())
   verifiedAt         DateTime?
 }
@@ -119,6 +123,25 @@ model Project {
   blockchainBlocks     BlockchainBlock[]
   communityVerifications CommunityVerification[]
   whistleblowerReports   WhistleblowerReport[]
+  evidence               ProjectEvidence[]
+}
+
+// Geo-tagged photographic evidence of field activity, with before/after phases.
+model ProjectEvidence {
+  id          String   @id @default(uuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  phase       String   @default("PROGRESS") // BEFORE, PROGRESS, AFTER
+  caption     String
+  imageUrl    String
+  lat         Float
+  lng         Float
+  // Distance in km between this photo and the project's declared location.
+  // Populated at upload time so admins can spot geographic misrepresentation.
+  distanceKm  Float    @default(0)
+  geoStatus   String   @default("MATCH") // MATCH, NEARBY, MISMATCH
+  capturedAt  DateTime @default(now())
+  uploadedBy  String?
 }
 
 model Beneficiary {
@@ -231,7 +254,9 @@ model CommunityVerification {
   location    String
   observation String
   imageUrl    String?
-  status      String   @default("PENDING") // PENDING, VERIFIED, REJECTED
+  // Did the observer confirm the NGO's claims on the ground, or dispute them?
+  verdict     String   @default("CONFIRMED") // CONFIRMED, DISPUTED
+  status      String   @default("PENDING")   // PENDING, VERIFIED, REJECTED
   createdAt   DateTime @default(now())
 }
 
@@ -254,6 +279,8 @@ model Notification {
   title     String
   message   String
   type      String   @default("INFO") // INFO, SUCCESS, WARNING, DANGER
+  // Where the user should go to act on this notification, e.g. "/ngo/documents".
+  link      String?
   read      Boolean  @default(false)
   createdAt DateTime @default(now())
 }

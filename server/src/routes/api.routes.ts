@@ -1,84 +1,117 @@
 import { Router } from 'express';
 import { authenticateToken, optionalAuth, requireRole } from '../middleware/auth.middleware';
+import { AuthController } from '../controllers/auth.controller';
+import { NGOController, DocumentController, GovController } from '../controllers/ngo.controller';
+import { ProjectController, EvidenceController, BeneficiaryController } from '../controllers/project.controller';
+import { DonationController, ExpenseController, LedgerController } from '../controllers/finance.controller';
+import { AdminController } from '../controllers/admin.controller';
+import { AnalyticsController, AIController } from '../controllers/public.controller';
 import {
-  AuthController,
-  NGOController,
-  DocumentController,
-  GovController,
-  ProjectController,
-  BeneficiaryController,
-  DonationController,
-  ExpenseController,
-  LedgerController,
-  AIController,
-  AdminController,
-  AnalyticsController,
-  WhistleblowerController
-} from '../controllers/appController';
+  WhistleblowerController, CommunityController, NotificationController
+} from '../controllers/engagement.controller';
 
 const router = Router();
 
-// Auth Routes
+const requireAdmin = [authenticateToken, requireRole(['ADMIN'])];
+const requireNgo = [authenticateToken, requireRole(['NGO', 'ADMIN'])];
+const requireDonor = [authenticateToken, requireRole(['DONOR', 'ADMIN'])];
+
+/* -------------------------------------------------------------------------- */
+/* Accounts                                                                    */
+/* -------------------------------------------------------------------------- */
 router.post('/auth/register', AuthController.register);
 router.post('/auth/login', AuthController.login);
 router.get('/auth/me', authenticateToken, AuthController.me);
+router.post('/auth/change-password', authenticateToken, AuthController.changePassword);
 
-// NGO Routes
-router.get('/ngos', NGOController.getAll);
-router.get('/ngos/:id', NGOController.getById);
-router.post('/ngos', authenticateToken, NGOController.create);
-router.put('/ngos/:id', authenticateToken, NGOController.update);
+/* -------------------------------------------------------------------------- */
+/* Organisations — public reads, owner/admin writes                            */
+/* -------------------------------------------------------------------------- */
+router.get('/ngos', optionalAuth, NGOController.list);
+router.get('/ngos/mine', ...requireNgo, NGOController.myOrganisation);
+router.get('/ngos/:id', optionalAuth, NGOController.getById);
+router.post('/ngos', ...requireNgo, NGOController.create);
+router.patch('/ngos/:id', authenticateToken, NGOController.update);
 
-// Documents
-router.post('/documents', authenticateToken, DocumentController.upload);
-router.post('/documents/:id/verify-integrity', DocumentController.verifyIntegrity);
+/* -------------------------------------------------------------------------- */
+/* Documents                                                                   */
+/* -------------------------------------------------------------------------- */
+router.post('/documents', ...requireNgo, DocumentController.upload);
+router.post('/documents/:id/verify-integrity', optionalAuth, DocumentController.verifyIntegrity);
+router.patch('/documents/:id/review', ...requireAdmin, DocumentController.review);
 
-// Government Mock API
-router.post('/government/verify', GovController.verify);
+/* Government credential check — writes verification state, so owner only.     */
+router.post('/government/verify', ...requireNgo, GovController.verify);
 
-// Projects
-router.get('/projects', ProjectController.getAll);
-router.get('/projects/:id', ProjectController.getById);
-router.post('/projects', authenticateToken, ProjectController.create);
+/* -------------------------------------------------------------------------- */
+/* Projects and field evidence                                                 */
+/* -------------------------------------------------------------------------- */
+router.get('/projects', optionalAuth, ProjectController.list);
+router.get('/projects/:id', optionalAuth, ProjectController.getById);
+router.post('/projects', ...requireNgo, ProjectController.create);
+router.patch('/projects/:id', ...requireNgo, ProjectController.update);
 
-// Beneficiaries
-router.get('/beneficiaries', BeneficiaryController.getAll);
-router.post('/beneficiaries', authenticateToken, BeneficiaryController.create);
-router.post('/beneficiaries/check-duplicate', BeneficiaryController.checkDuplicate);
+router.post('/projects/:id/evidence', ...requireNgo, EvidenceController.create);
+router.delete('/projects/:id/evidence/:evidenceId', ...requireNgo, EvidenceController.remove);
 
-// Financial & Ledger
-router.post('/donations', optionalAuth, DonationController.create);
-router.get('/donations', DonationController.getAll);
+/* Community verification is open to anyone who was there on the ground.       */
+router.get('/projects/:id/verifications', CommunityController.listForProject);
+router.post('/projects/:id/verifications', optionalAuth, CommunityController.submit);
 
-router.post('/expenses', authenticateToken, ExpenseController.create);
-router.get('/expenses', ExpenseController.getAll);
+/* -------------------------------------------------------------------------- */
+/* Beneficiaries — personal data, never public                                 */
+/* -------------------------------------------------------------------------- */
+router.get('/beneficiaries', ...requireNgo, BeneficiaryController.list);
+router.post('/beneficiaries', ...requireNgo, BeneficiaryController.create);
+router.post('/beneficiaries/check-duplicate', ...requireNgo, BeneficiaryController.checkDuplicate);
+
+/* -------------------------------------------------------------------------- */
+/* Money and the record chain                                                  */
+/* -------------------------------------------------------------------------- */
+router.post('/donations', ...requireDonor, DonationController.create);
+router.get('/donations', authenticateToken, DonationController.list);
+
+router.post('/expenses', ...requireNgo, ExpenseController.create);
+router.get('/expenses', optionalAuth, ExpenseController.list);
 
 router.get('/ledger', LedgerController.getChain);
-router.post('/ledger/verify', LedgerController.verifyChain);
+router.post('/ledger/verify', optionalAuth, LedgerController.verifyChain);
 
-// AI Engines
-router.post('/ai/fraud-score', AIController.fraudScore);
-router.post('/ai/transparency-score', AIController.transparencyScore);
-router.post('/ai/sdg-classify', AIController.sdgClassify);
+/* -------------------------------------------------------------------------- */
+/* Auditor panel                                                               */
+/* -------------------------------------------------------------------------- */
+router.get('/admin/statistics', ...requireAdmin, AdminController.statistics);
+router.get('/admin/queue', ...requireAdmin, AdminController.reviewQueue);
+router.post('/admin/ngos/:id/decision', ...requireAdmin, AdminController.decideNgo);
+router.get('/admin/audit-logs', ...requireAdmin, AdminController.auditLogs);
+router.patch('/admin/alerts/:id', ...requireAdmin, AdminController.resolveAlert);
+router.patch('/admin/reports/:id', ...requireAdmin, AdminController.updateReport);
+router.get('/admin/reports', ...requireAdmin, WhistleblowerController.list);
+
+/* -------------------------------------------------------------------------- */
+/* Anonymous reporting                                                         */
+/* -------------------------------------------------------------------------- */
+router.post('/reports', WhistleblowerController.submit);
+router.get('/reports/track/:code', WhistleblowerController.track);
+
+/* -------------------------------------------------------------------------- */
+/* Notifications                                                               */
+/* -------------------------------------------------------------------------- */
+router.get('/notifications', authenticateToken, NotificationController.list);
+router.patch('/notifications/:id/read', authenticateToken, NotificationController.markRead);
+router.post('/notifications/read-all', authenticateToken, NotificationController.markAllRead);
+
+/* -------------------------------------------------------------------------- */
+/* Open data and assistant                                                     */
+/* -------------------------------------------------------------------------- */
+router.get('/analytics/overview', AnalyticsController.overview);
+router.post('/ai/sdg-classify', authenticateToken, AIController.classify);
 router.post('/ai/chat', AIController.chat);
 
-// Admin Routes
-router.get('/admin/statistics', AdminController.getStatistics);
-router.post('/admin/approve-ngo/:id', authenticateToken, requireRole(['ADMIN']), AdminController.approveNGO);
-router.patch('/admin/ngos/:id/status', optionalAuth, AdminController.updateStatus);
-router.patch('/ngos/:id/status', optionalAuth, AdminController.updateStatus);
-router.get('/admin/audit-logs', authenticateToken, requireRole(['ADMIN']), AdminController.getAuditLogs);
-
-// Whistleblower
-router.post('/whistleblower', WhistleblowerController.submit);
-router.get('/whistleblower', authenticateToken, requireRole(['ADMIN']), WhistleblowerController.getAll);
-
-// Analytics & Overview
-router.get('/analytics/overview', AnalyticsController.getOverview);
-
-// Public Directory & API stats
-router.get('/public/statistics', AdminController.getStatistics);
-router.get('/public/ngos', NGOController.getAll);
-router.get('/public/projects', ProjectController.getAll);
+/* Stable public aliases for the open-data API documented in the app.          */
+router.get('/public/statistics', AnalyticsController.overview);
+router.get('/public/ngos', optionalAuth, NGOController.list);
+router.get('/public/projects', optionalAuth, ProjectController.list);
+router.get('/public/ledger', LedgerController.getChain);
 
 export default router;
