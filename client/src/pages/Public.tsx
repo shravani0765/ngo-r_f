@@ -1,29 +1,32 @@
 import React, { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
-  api, Ngo, Project, Block, Overview, CommunityReport,
-  money, shortMoney, num, date, parseSdgs
+  api, Ngo, Activity, Overview, Block, CAUSES,
+  money, shortMoney, num, date, docLabel
 } from '../lib/api';
 import {
-  Card, H1, H2, Btn, Badge, StatusBadge, Stat, ScoreDial, Empty, Field,
+  Card, H1, H2, Btn, Badge, StatusBadge, Stat, Empty, Field,
   Input, Textarea, Select, Alert, Loading, useLoad, useToast
 } from '../lib/ui';
 
-/* -- Home ---------------------------------------------------------------- */
+/* -- Landing ------------------------------------------------------------- */
 
 export function Home() {
-  const { data } = useLoad(() => api.get<Overview>('/analytics/overview'));
+  const { data: stats } = useLoad(() => api.get<Overview>('/analytics/overview'));
+  const { data: ngos } = useLoad(() => api.get<Ngo[]>('/ngos'));
+  const { data: gallery } = useLoad(() => api.get<Activity[]>('/gallery'));
 
   return (
     <>
+      {/* Hero */}
       <section className="rounded-2xl bg-slate-900 px-6 py-12 text-white sm:px-10 sm:py-16">
         <div className="max-w-2xl">
-          <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
-            See exactly where donations go.
+          <h1 className="text-3xl font-bold leading-tight tracking-tight sm:text-4xl">
+            Give with confidence. See where it goes.
           </h1>
           <p className="mt-3 text-base leading-relaxed text-slate-300">
-            Every organisation here has had its registration and documents checked. Every
-            donation is written to a record that anyone can re-verify.
+            Every organisation here has had its documents checked by a real person.
+            Every donation is recorded, and every rupee can be traced.
           </p>
           <div className="mt-6 flex flex-wrap gap-3">
             <Link to="/directory" className="rounded-lg bg-white px-5 py-3 text-sm font-semibold text-slate-900 hover:bg-slate-100">
@@ -36,23 +39,15 @@ export function Home() {
         </div>
       </section>
 
-      {data && data.hasData && (
-        <section className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <Stat label="Verified NGOs" value={num(data.verifiedNgos)} hint="Registration and documents checked" />
-          <Stat label="Funds tracked" value={shortMoney(data.totalDonatedAmount)} hint={`${data.ledgerRecords} linked records`} />
-          <Stat label="People reached" value={num(data.totalBeneficiaries)} hint="Each with a unique ID" />
-          <Stat label="Projects" value={num(data.totalProjects)} hint={`${data.activeProjects} running now`} />
-        </section>
-      )}
-
+      {/* How it works */}
       <section className="mt-12">
         <H2>How it works</H2>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {[
-            ['1', 'NGOs register', 'They submit registration, PAN, 12A and 80G details plus supporting documents.'],
-            ['2', 'We check', 'An automated government check runs, then a human auditor reviews the documents.'],
-            ['3', 'Donations are traced', 'Each donation is written to a linked record with the money in and out shown.'],
-            ['4', 'Impact is evidenced', 'NGOs upload geo-tagged photos, and the community can confirm or dispute them.']
+            ['1', 'Organisations register', 'They submit their details, identity documents and a government NGO certificate.'],
+            ['2', 'An admin checks them', 'A real person reviews every document before an organisation appears publicly.'],
+            ['3', 'Donors give directly', 'Pay by UPI to the organisation, and record the reference so it is traceable.'],
+            ['4', 'Impact is shown', 'Organisations upload photos of the work, approved before they go public.']
           ].map(([n, title, body]) => (
             <Card key={n}>
               <span className="grid h-8 w-8 place-items-center rounded-full bg-blue-700 text-sm font-bold text-white">{n}</span>
@@ -62,7 +57,113 @@ export function Home() {
           ))}
         </div>
       </section>
+
+      {/* Statistics */}
+      {stats?.hasData && (
+        <section className="mt-12">
+          <H2>Where things stand</H2>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <Stat label="Verified organisations" value={num(stats.verifiedNgos)} />
+            <Stat label="Donations tracked" value={shortMoney(stats.totalDonatedAmount)} />
+            <Stat label="Ledger records" value={num(stats.ledgerRecords)} />
+            <Stat label="Impact photos" value={num((gallery ?? []).length)} />
+          </div>
+        </section>
+      )}
+
+      {/* Verified NGOs */}
+      <section className="mt-12">
+        <div className="mb-3 flex items-center justify-between">
+          <H2>Verified organisations</H2>
+          <Link to="/directory" className="text-sm font-medium text-blue-700 hover:underline">See all</Link>
+        </div>
+        {(ngos ?? []).length === 0 ? (
+          <Empty title="None verified yet" body="Organisations appear here once an admin approves them." />
+        ) : (
+          <div className="grid gap-4 md:grid-cols-3">
+            {(ngos ?? []).slice(0, 3).map(n => <NgoCard key={n.id} ngo={n} />)}
+          </div>
+        )}
+      </section>
+
+      {/* Causes */}
+      <section className="mt-12">
+        <H2>Browse by cause</H2>
+        <div className="flex flex-wrap gap-2">
+          {CAUSES.map(c => (
+            <Link key={c} to={`/gallery?category=${encodeURIComponent(c)}`}
+              className="rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:border-blue-600 hover:text-blue-700">
+              {c}
+            </Link>
+          ))}
+        </div>
+      </section>
+
+      {/* Recent activity */}
+      {(gallery ?? []).length > 0 && (
+        <section className="mt-12">
+          <div className="mb-3 flex items-center justify-between">
+            <H2>Recent work</H2>
+            <Link to="/gallery" className="text-sm font-medium text-blue-700 hover:underline">See the gallery</Link>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {(gallery ?? []).slice(0, 3).map(a => <ActivityCard key={a.id} activity={a} />)}
+          </div>
+        </section>
+      )}
     </>
+  );
+}
+
+function NgoCard({ ngo }: { ngo: Ngo }) {
+  return (
+    <Card className="flex flex-col">
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-blue-100 text-sm font-bold text-blue-800">
+            {ngo.name.slice(0, 2).toUpperCase()}
+          </span>
+          <h3 className="font-semibold text-slate-900">{ngo.name}</h3>
+        </div>
+        <Badge tone="green">Verified</Badge>
+      </div>
+      <p className="mt-2 text-xs text-slate-500">{ngo.city}, {ngo.state}</p>
+      <p className="mt-2 line-clamp-3 flex-1 text-sm text-slate-600">{ngo.description || ngo.mission}</p>
+      {(ngo.causes ?? []).length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {(ngo.causes ?? []).slice(0, 3).map(c => <Badge key={c} tone="blue">{c}</Badge>)}
+        </div>
+      )}
+      <div className="mt-4 grid grid-cols-2 gap-2">
+        <Link to={`/ngos/${ngo.id}`}
+          className="rounded-lg border border-slate-300 px-3 py-2.5 text-center text-sm font-semibold text-slate-800 hover:bg-slate-50">
+          View impact
+        </Link>
+        <Link to="/donor"
+          className="rounded-lg bg-blue-700 px-3 py-2.5 text-center text-sm font-semibold text-white hover:bg-blue-800">
+          Donate
+        </Link>
+      </div>
+    </Card>
+  );
+}
+
+function ActivityCard({ activity }: { activity: Activity }) {
+  return (
+    <Card className="flex flex-col p-0">
+      <img src={`/api/activities/${activity.id}/image`} alt={activity.title} loading="lazy"
+        className="h-44 w-full rounded-t-xl bg-slate-100 object-cover" />
+      <div className="flex flex-1 flex-col p-4">
+        <div className="flex items-start justify-between gap-2">
+          <h3 className="text-sm font-semibold text-slate-900">{activity.title}</h3>
+          <Badge tone="blue">{activity.category}</Badge>
+        </div>
+        <p className="mt-1 line-clamp-3 flex-1 text-sm text-slate-600">{activity.description}</p>
+        <p className="mt-3 text-xs text-slate-500">
+          {activity.ngo?.name} · {date(activity.activityDate)}
+        </p>
+      </div>
+    </Card>
   );
 }
 
@@ -70,29 +171,54 @@ export function Home() {
 
 export function Directory() {
   const [search, setSearch] = useState('');
+  const [cause, setCause] = useState('');
   const [state, setState] = useState('');
+  const [sort, setSort] = useState('recent');
+
   const { data, loading, error } = useLoad(
-    () => api.get<Ngo[]>(`/ngos?${new URLSearchParams({ ...(search && { search }), ...(state && { state }) })}`),
-    [search, state]
+    () => api.get<Ngo[]>(`/ngos?${new URLSearchParams({ ...(search && { search }) })}`),
+    [search]
   );
 
   const states = Array.from(new Set((data ?? []).map(n => n.state))).sort();
 
+  const visible = (data ?? [])
+    .filter(n => !cause || (n.causes ?? []).includes(cause))
+    .filter(n => !state || n.state === state)
+    .sort((a, b) => {
+      if (sort === 'donations') return (b.totalReceived ?? 0) - (a.totalReceived ?? 0);
+      if (sort === 'location') return a.state.localeCompare(b.state);
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
+
   return (
     <>
-      <H1 sub="Every organisation listed here has passed a government registration check and had its documents reviewed by an auditor.">
+      <H1 sub="Every organisation here has had its documents reviewed and approved by an admin.">
         Find an organisation
       </H1>
 
       <Card className="mb-6">
-        <div className="grid gap-3 sm:grid-cols-[2fr,1fr]">
-          <Field label="Search by name or cause">
-            <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="e.g. education, Hope Foundation" />
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <Field label="Search">
+            <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Name or city" />
+          </Field>
+          <Field label="Cause">
+            <Select value={cause} onChange={e => setCause(e.target.value)}>
+              <option value="">All causes</option>
+              {CAUSES.map(c => <option key={c} value={c}>{c}</option>)}
+            </Select>
           </Field>
           <Field label="State">
             <Select value={state} onChange={e => setState(e.target.value)}>
               <option value="">All states</option>
               {states.map(s => <option key={s} value={s}>{s}</option>)}
+            </Select>
+          </Field>
+          <Field label="Sort by">
+            <Select value={sort} onChange={e => setSort(e.target.value)}>
+              <option value="recent">Recently registered</option>
+              <option value="donations">Most donations</option>
+              <option value="location">Location</option>
             </Select>
           </Field>
         </div>
@@ -101,33 +227,63 @@ export function Directory() {
       {loading && <Loading />}
       {error && <Alert tone="error">{error}</Alert>}
 
-      {data && data.length === 0 && (
-        <Empty title="Nothing matches that search"
-          body="Try a different word, or clear the filters to see every verified organisation." />
+      {!loading && visible.length === 0 && (
+        <Empty title="Nothing matches that search" body="Try a different word, or clear the filters." />
       )}
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {(data ?? []).map(ngo => (
-          <Card key={ngo.id} className="flex flex-col">
-            <div className="flex items-start justify-between gap-2">
-              <h3 className="font-semibold text-slate-900">{ngo.name}</h3>
-              <StatusBadge status={ngo.status} />
-            </div>
-            <p className="mt-1 text-xs text-slate-500">{ngo.district}, {ngo.state}</p>
-            <p className="mt-2 line-clamp-3 flex-1 text-sm leading-relaxed text-slate-600">{ngo.mission}</p>
+        {visible.map(n => <NgoCard key={n.id} ngo={n} />)}
+      </div>
+    </>
+  );
+}
 
-            <div className="mt-4"><ScoreDial score={ngo.transparencyScore} /></div>
+/* -- Public impact gallery ----------------------------------------------- */
 
-            <dl className="mt-4 grid grid-cols-2 gap-2 border-t border-slate-100 pt-3 text-sm">
-              <div><dt className="text-xs text-slate-500">Received</dt><dd className="font-semibold">{shortMoney(ngo.totalReceived ?? 0)}</dd></div>
-              <div><dt className="text-xs text-slate-500">Projects</dt><dd className="font-semibold">{ngo.projectCount ?? 0}</dd></div>
-            </dl>
+export function Gallery() {
+  const [category, setCategory] = useState(
+    new URLSearchParams(window.location.search).get('category') ?? ''
+  );
 
-            <Link to={`/ngos/${ngo.id}`} className="mt-4 rounded-lg border border-slate-300 px-4 py-2.5 text-center text-sm font-semibold text-slate-800 hover:bg-slate-50">
-              View details
-            </Link>
-          </Card>
+  const { data, loading } = useLoad(
+    () => api.get<Activity[]>(`/gallery?${new URLSearchParams({ ...(category && { category }) })}`),
+    [category]
+  );
+
+  return (
+    <>
+      <H1 sub="Photos of real work, uploaded by verified organisations and approved before they appear here.">
+        Impact gallery
+      </H1>
+
+      <div className="mb-6 flex flex-wrap gap-2">
+        <button onClick={() => setCategory('')}
+          className={`rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${
+            !category ? 'border-blue-700 bg-blue-50 text-blue-800' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+          }`}>
+          All
+        </button>
+        {CAUSES.map(c => (
+          <button key={c} onClick={() => setCategory(c)}
+            className={`rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${
+              category === c ? 'border-blue-700 bg-blue-50 text-blue-800' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+            }`}>
+            {c}
+          </button>
         ))}
+      </div>
+
+      {loading && <Loading />}
+
+      {!loading && (data ?? []).length === 0 && (
+        <Empty title="No photos yet"
+          body={category
+            ? `No approved photos under "${category}". Try another cause.`
+            : 'Once organisations upload photos and an admin approves them, they appear here.'} />
+      )}
+
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {(data ?? []).map(a => <ActivityCard key={a.id} activity={a} />)}
       </div>
     </>
   );
@@ -138,6 +294,7 @@ export function Directory() {
 export function NgoProfile() {
   const { id } = useParams<{ id: string }>();
   const { data: ngo, loading, error } = useLoad(() => api.get<Ngo>(`/ngos/${id}`), [id]);
+  const { data: gallery } = useLoad(() => api.get<Activity[]>(`/gallery?ngoId=${id}`), [id]);
 
   if (loading) return <Loading />;
   if (error) return <Alert tone="error">{error}</Alert>;
@@ -149,16 +306,16 @@ export function NgoProfile() {
     <>
       <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <h1 className="text-2xl font-bold text-slate-900 sm:text-3xl">{ngo.name}</h1>
             <StatusBadge status={ngo.status} />
           </div>
           <p className="mt-1 text-sm text-slate-600">
-            Registration {ngo.regNum} · {ngo.district}, {ngo.state}
+            {ngo.presidentName && `${ngo.presidentName} · `}{ngo.city}, {ngo.state}
           </p>
         </div>
         <Link to="/donor" className="rounded-lg bg-blue-700 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-800">
-          Support this organisation
+          Donate
         </Link>
       </div>
 
@@ -166,74 +323,66 @@ export function NgoProfile() {
         <div className="space-y-6 lg:col-span-2">
           <Card>
             <H2>About</H2>
-            <p className="text-sm leading-relaxed text-slate-700">{ngo.mission}</p>
-            <p className="mt-3 text-sm text-slate-600"><span className="font-medium">Works on:</span> {ngo.areaOfWork}</p>
+            <p className="text-sm leading-relaxed text-slate-700">{ngo.description || ngo.mission}</p>
+            {(ngo.causes ?? []).length > 0 && (
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {(ngo.causes ?? []).map(c => <Badge key={c} tone="blue">{c}</Badge>)}
+              </div>
+            )}
           </Card>
 
-          {f && (
+          {f && f.totalReceived > 0 && (
             <Card>
-              <H2>Where the money is</H2>
+              <H2>Money received</H2>
               <div className="grid gap-4 sm:grid-cols-3">
                 <div><p className="text-xs text-slate-500">Received</p><p className="text-xl font-bold">{money(f.totalReceived)}</p></div>
                 <div><p className="text-xs text-slate-500">Spent</p><p className="text-xl font-bold text-emerald-700">{money(f.totalSpent)}</p></div>
                 <div><p className="text-xs text-slate-500">Remaining</p><p className="text-xl font-bold text-blue-700">{money(f.remaining)}</p></div>
               </div>
-              <div className="mt-4 h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
-                <div className="h-full bg-emerald-600" style={{ width: `${Math.min(100, f.utilisationPercent)}%` }} />
-              </div>
-              <p className="mt-2 text-xs text-slate-500">{f.utilisationPercent}% of money received has been spent and receipted.</p>
             </Card>
           )}
 
           <div>
-            <H2>Projects</H2>
-            {(!ngo.projects || ngo.projects.length === 0) ? (
-              <Empty title="No projects yet" body="This organisation has not published any projects." />
+            <H2>Work they have done</H2>
+            {(gallery ?? []).length === 0 ? (
+              <Empty title="No photos yet" body="This organisation has not published any activity photos." />
             ) : (
-              <div className="space-y-4">
-                {ngo.projects.map(p => <ProjectCard key={p.id} project={p} />)}
+              <div className="grid gap-4 sm:grid-cols-2">
+                {(gallery ?? []).map(a => <ActivityCard key={a.id} activity={a} />)}
               </div>
             )}
           </div>
         </div>
 
         <div className="space-y-6">
-          <Card><ScoreDial score={ngo.transparencyScore} /></Card>
-
           <Card>
-            <H2>Documents</H2>
-            {(!ngo.documents || ngo.documents.length === 0) ? (
-              <p className="text-sm text-slate-600">No documents uploaded yet.</p>
-            ) : (
-              <ul className="space-y-3">
-                {ngo.documents.map(d => (
-                  <li key={d.id} className="flex items-start justify-between gap-2 border-b border-slate-100 pb-3 last:border-0 last:pb-0">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium text-slate-900">{d.fileName}</p>
-                      <p className="font-mono text-[11px] text-slate-400">SHA-256 {d.hash.slice(0, 16)}…</p>
-                    </div>
-                    <StatusBadge status={d.status} />
-                  </li>
-                ))}
-              </ul>
-            )}
+            <H2>Details</H2>
+            <dl className="space-y-2 text-sm">
+              {[
+                ['Registration', ngo.regNum],
+                ['Head', ngo.presidentName],
+                ['Email', ngo.email],
+                ['Phone', ngo.phone],
+                ['Established', ngo.establishedYear ? String(ngo.establishedYear) : '']
+              ].filter(([, v]) => v).map(([k, v]) => (
+                <div key={k} className="flex justify-between gap-2">
+                  <dt className="text-slate-500">{k}</dt>
+                  <dd className="text-right font-medium text-slate-900">{v}</dd>
+                </div>
+              ))}
+            </dl>
           </Card>
 
-          {ngo.govVerification && (
+          {/* Documents appear only for the owner or an admin — the public
+              payload does not contain them at all. */}
+          {(ngo.documents ?? []).length > 0 && (
             <Card>
-              <H2>Government check</H2>
+              <H2>Documents on file</H2>
               <ul className="space-y-2 text-sm">
-                {[
-                  ['Registration number', ngo.govVerification.regNumStatus],
-                  ['PAN', ngo.govVerification.panStatus],
-                  ['12A exemption', ngo.govVerification.cert12AStatus],
-                  ['80G deduction', ngo.govVerification.cert80GStatus]
-                ].map(([label, status]) => (
-                  <li key={label} className="flex items-center justify-between">
-                    <span className="text-slate-600">{label}</span>
-                    <Badge tone={status === 'VERIFIED' ? 'green' : 'red'}>
-                      {status === 'VERIFIED' ? 'Confirmed' : 'Not confirmed'}
-                    </Badge>
+                {ngo.documents!.map(d => (
+                  <li key={d.id} className="flex items-center justify-between gap-2">
+                    <span className="text-slate-700">{docLabel(d.docType)}</span>
+                    <StatusBadge status={d.status} />
                   </li>
                 ))}
               </ul>
@@ -245,153 +394,13 @@ export function NgoProfile() {
   );
 }
 
-function ProjectCard({ project }: { project: Project }) {
-  const [open, setOpen] = useState(false);
-  const sdgs = parseSdgs(project.sdgGoals);
-
-  return (
-    <Card>
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="font-semibold text-slate-900">{project.title}</h3>
-          <p className="mt-0.5 text-xs text-slate-500">{project.location}</p>
-        </div>
-        <Badge tone="blue">{project.category}</Badge>
-      </div>
-
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">{project.description}</p>
-
-      {sdgs.length > 0 && (
-        <div className="mt-3 flex flex-wrap gap-1.5">
-          {sdgs.map(s => <Badge key={s} tone="grey">{s}</Badge>)}
-        </div>
-      )}
-
-      <dl className="mt-4 grid grid-cols-3 gap-2 border-t border-slate-100 pt-3 text-sm">
-        <div><dt className="text-xs text-slate-500">Budget</dt><dd className="font-semibold">{shortMoney(project.budget)}</dd></div>
-        <div><dt className="text-xs text-slate-500">Target</dt><dd className="font-semibold">{num(project.expectedBeneficiaries)}</dd></div>
-        <div><dt className="text-xs text-slate-500">Reached</dt><dd className="font-semibold">{num(project.actualBeneficiaries)}</dd></div>
-      </dl>
-
-      {project.evidence && project.evidence.length > 0 && (
-        <>
-          <Btn variant="ghost" className="mt-3 px-0" onClick={() => setOpen(o => !o)}>
-            {open ? 'Hide' : 'Show'} {project.evidence.length} photo{project.evidence.length === 1 ? '' : 's'} from the field
-          </Btn>
-          {open && (
-            <div className="mt-3 grid gap-3 sm:grid-cols-2">
-              {project.evidence.map(e => (
-                <figure key={e.id} className="overflow-hidden rounded-lg border border-slate-200">
-                  <img src={e.imageUrl} alt={e.caption} loading="lazy" className="h-32 w-full bg-slate-100 object-cover" />
-                  <figcaption className="p-2">
-                    <p className="text-xs font-medium text-slate-800">{e.caption}</p>
-                    <div className="mt-1 flex items-center gap-2">
-                      <Badge tone="grey">{e.phase.toLowerCase()}</Badge>
-                      <StatusBadge status={e.geoStatus} />
-                    </div>
-                  </figcaption>
-                </figure>
-              ))}
-            </div>
-          )}
-        </>
-      )}
-    </Card>
-  );
-}
-
-/* -- Impact -------------------------------------------------------------- */
-
-export function Impact() {
-  const { data, loading, error } = useLoad(() => api.get<Overview>('/analytics/overview'));
-
-  if (loading) return <Loading />;
-  if (error) return <Alert tone="error">{error}</Alert>;
-  if (!data) return null;
-
-  if (!data.hasData) {
-    return (
-      <>
-        <H1>Impact across the platform</H1>
-        <Empty title="No verified activity yet"
-          body="Once organisations are verified and donations recorded, the totals will appear here. Nothing on this page is estimated." />
-      </>
-    );
-  }
-
-  return (
-    <>
-      <H1 sub="Every figure below is counted from live records. Nothing here is estimated.">
-        Impact across the platform
-      </H1>
-
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="People reached" value={num(data.totalBeneficiaries)} hint="Unique, de-duplicated IDs" />
-        <Stat label="Verified NGOs" value={num(data.verifiedNgos)} hint={`of ${data.totalNgos} registered`} />
-        <Stat label="Money tracked" value={shortMoney(data.totalDonatedAmount)} hint={`${data.utilisationPercent}% spent so far`} />
-        <Stat label="Evidence photos" value={num(data.evidencePhotos)} hint={`${data.communityConfirmations} confirmed by locals`} />
-      </div>
-
-      {data.costPerBeneficiary !== null && (
-        <Card className="mt-6">
-          <H2>Cost per person reached</H2>
-          <p className="text-3xl font-bold text-slate-900">{money(data.costPerBeneficiary)}</p>
-          <p className="mt-1 text-sm text-slate-600">
-            Total recorded spending divided by the number of people supported.
-          </p>
-        </Card>
-      )}
-
-      <div className="mt-6 grid gap-6 lg:grid-cols-2">
-        <Card>
-          <H2>Projects by cause</H2>
-          {data.sectorDistribution.length === 0 ? (
-            <p className="text-sm text-slate-600">No projects published yet.</p>
-          ) : (
-            <ul className="space-y-3">
-              {data.sectorDistribution.map(s => (
-                <li key={s.sector}>
-                  <div className="flex justify-between text-sm">
-                    <span className="font-medium text-slate-800">{s.sector}</span>
-                    <span className="text-slate-600">{s.percentage}% ({s.projects})</span>
-                  </div>
-                  <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-slate-100">
-                    <div className="h-full bg-blue-700" style={{ width: `${s.percentage}%` }} />
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
-
-        <Card>
-          <H2>Where organisations work</H2>
-          {data.stateDistribution.length === 0 ? (
-            <p className="text-sm text-slate-600">No verified organisations yet.</p>
-          ) : (
-            <ul className="divide-y divide-slate-100 text-sm">
-              {data.stateDistribution.map(s => (
-                <li key={s.state} className="flex justify-between py-2">
-                  <span className="text-slate-700">{s.state}</span>
-                  <span className="font-semibold">{s.organisations}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
-      </div>
-    </>
-  );
-}
-
-/* -- Ledger -------------------------------------------------------------- */
+/* -- Fund records -------------------------------------------------------- */
 
 export function Ledger() {
   const toast = useToast();
-  const { data, loading, error } = useLoad(() => api.get<Block[]>('/ledger'));
+  const { data, loading } = useLoad(() => api.get<Block[]>('/ledger'));
   const [checking, setChecking] = useState(false);
   const [result, setResult] = useState<{ isValid: boolean; message: string } | null>(null);
-  const [showTech, setShowTech] = useState(false);
 
   const verify = async () => {
     setChecking(true);
@@ -412,16 +421,11 @@ export function Ledger() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900 sm:text-3xl">Fund records</h1>
           <p className="mt-1 max-w-2xl text-sm text-slate-600">
-            Each donation is written to a record linked to the one before it. Changing any past
-            record breaks the chain — press the button to check for yourself.
+            Each confirmed donation is written to a record linked to the one before it.
+            Changing any past record breaks the chain — check it yourself.
           </p>
         </div>
-        <div className="flex gap-2">
-          <Btn variant="secondary" onClick={() => setShowTech(s => !s)}>
-            {showTech ? 'Hide' : 'Show'} technical detail
-          </Btn>
-          <Btn onClick={verify} loading={checking}>Check records</Btn>
-        </div>
+        <Btn onClick={verify} loading={checking}>Check records</Btn>
       </div>
 
       {result && (
@@ -431,10 +435,9 @@ export function Ledger() {
       )}
 
       {loading && <Loading />}
-      {error && <Alert tone="error">{error}</Alert>}
 
-      {data && data.length === 0 && (
-        <Empty title="No donations recorded yet" body="Once a donation is made it will appear here." />
+      {!loading && (data ?? []).length === 0 && (
+        <Empty title="No donations recorded yet" body="Confirmed donations appear here." />
       )}
 
       <div className="space-y-3">
@@ -442,22 +445,15 @@ export function Ledger() {
           <Card key={b.id}>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <p className="font-semibold text-slate-900">{b.project?.title ?? 'Donation'}</p>
-                <p className="text-sm text-slate-600">{b.ngo?.name}</p>
-                <p className="mt-1 text-xs text-slate-400">{date(b.timestamp)}</p>
+                <p className="font-semibold text-slate-900">{b.ngo?.name}</p>
+                <p className="text-xs text-slate-500">{date(b.timestamp)}</p>
+                <p className="mt-1 break-all font-mono text-[11px] text-slate-400">{b.currentHash}</p>
               </div>
               <div className="text-right">
                 <p className="text-lg font-bold text-emerald-700">{money(b.amount)}</p>
                 <Badge tone="grey">Record #{b.blockNumber}</Badge>
               </div>
             </div>
-            {showTech && (
-              <dl className="mt-3 space-y-1 overflow-x-auto rounded-lg bg-slate-900 p-3 font-mono text-[11px] text-slate-300">
-                <div><dt className="inline text-amber-400">Transaction: </dt><dd className="inline">{b.txnId}</dd></div>
-                <div><dt className="inline text-amber-400">Previous: </dt><dd className="inline break-all">{b.prevHash}</dd></div>
-                <div><dt className="inline text-blue-400">This record: </dt><dd className="inline break-all">{b.currentHash}</dd></div>
-              </dl>
-            )}
           </Card>
         ))}
       </div>
@@ -500,16 +496,19 @@ export function ReportConcern() {
 
   return (
     <div className="mx-auto max-w-xl">
-      <H1 sub="Nothing about you is recorded — no name, no account, no address. Keep the tracking code to follow what happens.">
+      <H1 sub="Nothing about you is recorded — no name, no account. Keep the tracking code to follow what happens.">
         Report a concern
       </H1>
 
       {done ? (
         <Card>
-          <Alert tone="success">Your report has been received and sent to an auditor.</Alert>
-          <p className="mt-4 text-sm text-slate-600">Your tracking code — save this, it is the only way to follow up:</p>
-          <p className="mt-2 rounded-lg bg-slate-100 p-3 text-center font-mono text-lg font-bold text-slate-900">{done.trackingCode}</p>
-          <Btn variant="secondary" className="mt-4 w-full" onClick={() => { setDone(null); setForm({ category: 'Financial Misuse', description: '' }); }}>
+          <Alert tone="success">Your report has been received and sent to an admin.</Alert>
+          <p className="mt-4 text-sm text-slate-600">Save this code — it is the only way to follow up:</p>
+          <p className="mt-2 rounded-lg bg-slate-100 p-3 text-center font-mono text-lg font-bold text-slate-900">
+            {done.trackingCode}
+          </p>
+          <Btn variant="secondary" className="mt-4 w-full"
+            onClick={() => { setDone(null); setForm({ category: 'Financial Misuse', description: '' }); }}>
             Report something else
           </Btn>
         </Card>
@@ -519,19 +518,16 @@ export function ReportConcern() {
             <Field label="What kind of problem is it?">
               <Select value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}>
                 <option value="Financial Misuse">Money is being misused</option>
-                <option value="Fake Beneficiaries">People helped are made up or counted twice</option>
-                <option value="Fake Documents">Documents or certificates look forged</option>
-                <option value="Location Fraud">Work is not happening where they claim</option>
+                <option value="Fake Beneficiaries">People helped are made up</option>
+                <option value="Fake Documents">Documents look forged</option>
+                <option value="Location Fraud">Work is not happening where claimed</option>
                 <option value="Other">Something else</option>
               </Select>
             </Field>
-
-            <Field label="What did you see?" hint="At least 20 characters. Include places, dates and names if you can.">
+            <Field label="What did you see?" hint="At least 20 characters. Include places and dates if you can.">
               <Textarea rows={5} required minLength={20} value={form.description}
-                onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-                placeholder="Describe what happened…" />
+                onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
             </Field>
-
             <Btn type="submit" loading={busy} className="w-full">Send report anonymously</Btn>
           </form>
         </Card>
@@ -545,7 +541,9 @@ export function ReportConcern() {
         </form>
         {status && (
           <div className="mt-3">
-            <Alert tone="info"><span className="font-semibold">{status.status.replace(/_/g, ' ').toLowerCase()}</span> — {status.explanation}</Alert>
+            <Alert tone="info">
+              <span className="font-semibold">{status.status.replace(/_/g, ' ').toLowerCase()}</span> — {status.explanation}
+            </Alert>
           </div>
         )}
       </Card>
@@ -557,10 +555,10 @@ export function ReportConcern() {
 
 export function ApiDocs() {
   const endpoints = [
-    ['GET', '/api/public/ngos', 'Verified organisations with transparency scores.'],
-    ['GET', '/api/public/projects', 'Published projects with budgets and beneficiary counts.'],
-    ['GET', '/api/public/ledger', 'The full donation record chain.'],
-    ['GET', '/api/public/statistics', 'Aggregate impact figures.'],
+    ['GET', '/api/public/ngos', 'Verified organisations.'],
+    ['GET', '/api/public/gallery', 'Approved impact photos.'],
+    ['GET', '/api/public/ledger', 'The donation record chain.'],
+    ['GET', '/api/public/statistics', 'Aggregate figures.'],
     ['POST', '/api/reports', 'Submit an anonymous concern.']
   ];
 

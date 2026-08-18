@@ -107,8 +107,13 @@ export function StatusBadge({ status }: { status: string }) {
   const map: Record<string, [string, string]> = {
     VERIFIED: ['green', 'Verified'],
     PENDING: ['amber', 'Awaiting review'],
+    UNDER_REVIEW: ['blue', 'Being reviewed'],
     REQUIRES_CORRECTION: ['amber', 'Changes needed'],
     REJECTED: ['red', 'Not approved'],
+    SUSPENDED: ['red', 'Suspended'],
+    APPROVED: ['green', 'Approved'],
+    SUCCESSFUL: ['green', 'Successful'],
+    FAILED: ['red', 'Failed'],
     ACTIVE: ['green', 'Active'],
     COMPLETED: ['blue', 'Completed'],
     SUBMITTED: ['amber', 'New'],
@@ -204,6 +209,174 @@ export function Alert({ tone = 'info', children }: { tone?: 'info' | 'success' |
 
 export function Loading({ label = 'Loading…' }: { label?: string }) {
   return <div className="py-12 text-center text-sm text-slate-500">{label}</div>;
+}
+
+/* -- Stepper ------------------------------------------------------------- */
+
+/** Progress indicator for the multi-step registration form. */
+export function Stepper({ steps, current }: { steps: string[]; current: number }) {
+  return (
+    <nav aria-label="Progress" className="mb-6">
+      <ol className="flex flex-wrap items-center gap-x-2 gap-y-2">
+        {steps.map((label, i) => {
+          const done = i < current;
+          const active = i === current;
+          return (
+            <li key={label} className="flex items-center gap-2">
+              <span
+                aria-current={active ? 'step' : undefined}
+                className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
+                  done ? 'bg-emerald-600 text-white'
+                  : active ? 'bg-blue-700 text-white'
+                  : 'bg-slate-200 text-slate-600'
+                }`}
+              >
+                {done ? '✓' : i + 1}
+              </span>
+              <span className={`text-xs font-medium ${active ? 'text-slate-900' : 'text-slate-500'}`}>
+                {label}
+              </span>
+              {i < steps.length - 1 && <span aria-hidden className="hidden h-px w-6 bg-slate-300 sm:block" />}
+            </li>
+          );
+        })}
+      </ol>
+    </nav>
+  );
+}
+
+/* -- File input ---------------------------------------------------------- */
+
+/** File picker showing the chosen file name and enforcing type and size. */
+export function FileInput({
+  accept = '.jpg,.jpeg,.png,.pdf',
+  maxMb = 5,
+  onChange,
+  required
+}: {
+  accept?: string;
+  maxMb?: number;
+  onChange: (file: File | null) => void;
+  required?: boolean;
+}) {
+  const [name, setName] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const handle = (file: File | null) => {
+    setError(null);
+    if (!file) { setName(null); onChange(null); return; }
+
+    if (file.size > maxMb * 1024 * 1024) {
+      setError(`That file is ${(file.size / 1024 / 1024).toFixed(1)} MB. The limit is ${maxMb} MB.`);
+      setName(null);
+      onChange(null);
+      return;
+    }
+
+    setName(file.name);
+    onChange(file);
+  };
+
+  return (
+    <div>
+      <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-dashed border-slate-300 px-4 py-3 transition-colors hover:border-blue-600 hover:bg-blue-50/40">
+        <span className="rounded-md bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700">
+          Choose file
+        </span>
+        <span className="min-w-0 flex-1 truncate text-sm text-slate-600">
+          {name ?? `JPG, PNG or PDF · up to ${maxMb} MB`}
+        </span>
+        <input
+          type="file"
+          accept={accept}
+          required={required && !name}
+          className="sr-only"
+          onChange={e => handle(e.target.files?.[0] ?? null)}
+        />
+      </label>
+      {error && <p className="mt-1 text-xs font-medium text-rose-700">{error}</p>}
+    </div>
+  );
+}
+
+/* -- Modal and confirmation --------------------------------------------- */
+
+export function Modal({
+  title, onClose, children, footer
+}: {
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+  footer?: React.ReactNode;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/50 p-4 sm:items-center">
+      <div role="dialog" aria-modal="true" aria-label={title}
+        className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl bg-white shadow-xl">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+          <h2 className="text-base font-semibold text-slate-900">{title}</h2>
+          <button onClick={onClose} aria-label="Close"
+            className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700">✕</button>
+        </div>
+        <div className="px-5 py-4">{children}</div>
+        {footer && <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4">{footer}</div>}
+      </div>
+    </div>
+  );
+}
+
+/** Confirmation before something destructive. */
+export function Confirm({
+  title, body, confirmLabel = 'Confirm', danger, onConfirm, onCancel, busy
+}: {
+  title: string; body: string; confirmLabel?: string; danger?: boolean;
+  onConfirm: () => void; onCancel: () => void; busy?: boolean;
+}) {
+  return (
+    <Modal title={title} onClose={onCancel} footer={
+      <>
+        <Btn variant="secondary" onClick={onCancel}>Cancel</Btn>
+        <Btn variant={danger ? 'danger' : 'primary'} onClick={onConfirm} loading={busy}>
+          {confirmLabel}
+        </Btn>
+      </>
+    }>
+      <p className="text-sm leading-relaxed text-slate-700">{body}</p>
+    </Modal>
+  );
+}
+
+/* -- Tabs ---------------------------------------------------------------- */
+
+export function Tabs<T extends string>({
+  tabs, current, onChange
+}: {
+  tabs: { id: T; label: string; badge?: number }[];
+  current: T;
+  onChange: (id: T) => void;
+}) {
+  return (
+    <nav className="mb-6 flex gap-1 overflow-x-auto border-b border-slate-200">
+      {tabs.map(t => (
+        <button key={t.id} onClick={() => onChange(t.id)}
+          aria-current={current === t.id ? 'page' : undefined}
+          className={`flex items-center gap-2 whitespace-nowrap border-b-2 px-4 py-2.5 text-sm font-medium transition-colors ${
+            current === t.id
+              ? 'border-blue-700 text-blue-700'
+              : 'border-transparent text-slate-600 hover:text-slate-900'
+          }`}>
+          {t.label}
+          {t.badge ? <Badge tone="amber">{t.badge}</Badge> : null}
+        </button>
+      ))}
+    </nav>
+  );
 }
 
 /* -- Data loading hook --------------------------------------------------- */

@@ -5,8 +5,8 @@ import {
 import { api, token, User, Note } from './lib/api';
 import { ToastHost, Btn, Badge, Loading } from './lib/ui';
 
-import { Home, Directory, NgoProfile, Impact, Ledger, ReportConcern, ApiDocs } from './pages/Public';
-import { SignIn, Register } from './pages/Account';
+import { Home, Directory, NgoProfile, Gallery, Ledger, ReportConcern, ApiDocs } from './pages/Public';
+import { SignIn, Register, ForgotPassword, ResetPassword } from './pages/Account';
 import { NgoWorkspace } from './pages/Ngo';
 import { DonorHome } from './pages/Donor';
 import { AdminPanel } from './pages/Admin';
@@ -102,7 +102,7 @@ function Protected({ roles, children }: { roles: string[]; children: React.React
 
 const publicLinks = [
   { to: '/directory', label: 'Find NGOs' },
-  { to: '/impact', label: 'Impact' },
+  { to: '/gallery', label: 'Impact gallery' },
   { to: '/ledger', label: 'Fund records' },
   { to: '/report', label: 'Report a concern' }
 ];
@@ -200,13 +200,15 @@ export default function App() {
                 <Route path="/" element={<Home />} />
                 <Route path="/directory" element={<Directory />} />
                 <Route path="/ngos/:id" element={<NgoProfile />} />
-                <Route path="/impact" element={<Impact />} />
+                <Route path="/gallery" element={<Gallery />} />
                 <Route path="/ledger" element={<Ledger />} />
                 <Route path="/report" element={<ReportConcern />} />
                 <Route path="/api-docs" element={<ApiDocs />} />
 
                 <Route path="/signin" element={<SignIn />} />
                 <Route path="/register" element={<Register />} />
+                <Route path="/forgot-password" element={<ForgotPassword />} />
+                <Route path="/reset-password" element={<ResetPassword />} />
 
                 <Route path="/ngo/*" element={
                   <Protected roles={['NGO', 'ADMIN']}><NgoWorkspace /></Protected>

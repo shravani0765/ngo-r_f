@@ -89,6 +89,21 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
     return res.status(err.status).json({ message: err.message });
   }
 
+  // Upload rejections are the user's problem to fix, not a server fault.
+  if (err?.name === 'MulterError') {
+    const message = err.code === 'LIMIT_FILE_SIZE'
+      ? `That file is too large. The limit is ${process.env.MAX_UPLOAD_MB ?? 5} MB.`
+      : err.code === 'LIMIT_FILE_COUNT' || err.code === 'LIMIT_UNEXPECTED_FILE'
+      ? 'Please upload one file at a time.'
+      : 'That file could not be accepted.';
+    return res.status(400).json({ message });
+  }
+
+  // Thrown by the upload fileFilter for a disallowed type.
+  if (typeof err?.message === 'string' && err.message.includes('files are allowed')) {
+    return res.status(400).json({ message: err.message });
+  }
+
   // Prisma unique-constraint violations are a user error, not a crash.
   if (err?.code === 'P2002') {
     const field = Array.isArray(err?.meta?.target) ? err.meta.target.join(', ') : 'value';
