@@ -10,21 +10,52 @@ dotenv.config();
 const app = express();
 const PORT = Number(process.env.PORT || 5001);
 
+const isProduction = process.env.NODE_ENV === 'production';
+
 /**
- * Browser origins allowed to call this API. In development the Vite dev server
- * is permitted; in production the list must be set explicitly rather than
- * defaulting to "any site can call us with the user's token".
+ * Browser origins allowed to call this API.
+ *
+ * In production the list must be set explicitly, rather than defaulting to
+ * "any site may call us with the user's token".
  */
-const allowedOrigins = (process.env.CORS_ORIGINS ?? 'http://localhost:5173,http://127.0.0.1:5173')
+const allowedOrigins = (process.env.CORS_ORIGINS ?? '')
   .split(',')
   .map(o => o.trim())
   .filter(Boolean);
 
+/**
+ * Outside production we also accept loopback and private-network addresses on
+ * any port, so the app works when opened from another device on the same Wi-Fi
+ * — which is how it gets demonstrated. These ranges are not routable from the
+ * public internet, so this does not widen the production surface.
+ */
+function isLocalNetworkOrigin(origin: string): boolean {
+  if (isProduction) return false;
+  try {
+    const { hostname } = new URL(origin);
+    return (
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      hostname === '[::1]' ||
+      /^10\./.test(hostname) ||
+      /^192\.168\./.test(hostname) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(hostname)
+    );
+  } catch {
+    return false;
+  }
+}
+
 app.use(cors({
   origin(origin, callback) {
     // Same-origin and non-browser clients (curl, server-to-server) send no Origin.
-    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
-    return callback(new Error(`Origin ${origin} is not allowed to call this API.`));
+    if (!origin || allowedOrigins.includes(origin) || isLocalNetworkOrigin(origin)) {
+      return callback(null, true);
+    }
+    // Refuse by withholding the CORS headers, which is what the browser acts on.
+    // Passing an Error here instead would surface as a 500 "server error", which
+    // is both misleading and indistinguishable from a real fault.
+    return callback(null, false);
   },
   credentials: true
 }));
