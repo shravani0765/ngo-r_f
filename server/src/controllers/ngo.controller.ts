@@ -9,19 +9,15 @@ import {
 import { logAudit } from '../lib/audit';
 import { notifyNgoOwner, notifyAdmins } from '../services/notification.service';
 import { recomputeScores } from '../services/scoring.service';
-import { MockGovernmentVerificationService } from '../services/govVerification.service';
+import { isValidIndianPhone, isValidPinCode, maskIdentity } from '../services/identity.service';
 
 const prisma = new PrismaClient();
 
 /** Fields an NGO may edit about itself. Status and scores are earned, not set. */
 const EDITABLE_NGO_FIELDS = [
-  'name', 'pan', 'certificate12A', 'certificate80G', 'csrReg', 'address',
-  'state', 'district', 'phone', 'email', 'website', 'mission', 'areaOfWork',
-  'establishedYear', 'employees', 'volunteers'
-] as const;
-
-const DOC_TYPES = [
-  'REGISTRATION', 'PAN', '12A', '80G', 'AUDIT_REPORT', 'ANNUAL_REPORT', 'BANK_DOC'
+  'name', 'description', 'presidentName', 'csrReg', 'address', 'city',
+  'state', 'district', 'pinCode', 'phone', 'email', 'website', 'mission',
+  'areaOfWork', 'establishedYear', 'employees', 'volunteers'
 ] as const;
 
 function withSector<T extends { areaOfWork: string }>(ngo: T) {
@@ -109,14 +105,15 @@ export const NGOController = {
       data: {
         userId: req.user!.id,
         name: requireString(req.body?.name, 'Organisation name', 200),
+        description: optionalString(req.body?.description, 2000) ?? '',
+        presidentName: optionalString(req.body?.presidentName, 200) ?? '',
         regNum,
-        pan: optionalString(req.body?.pan, 40) ?? '',
-        certificate12A: optionalString(req.body?.certificate12A, 80) ?? '',
-        certificate80G: optionalString(req.body?.certificate80G, 80) ?? '',
         csrReg: optionalString(req.body?.csrReg, 80),
         address: optionalString(req.body?.address, 500) ?? '',
+        city: optionalString(req.body?.city, 100) ?? '',
         state: optionalString(req.body?.state, 100) ?? '',
-        district: optionalString(req.body?.district, 100) ?? '',
+        district: optionalString(req.body?.district, 100) ?? optionalString(req.body?.city, 100) ?? '',
+        pinCode: optionalString(req.body?.pinCode, 10) ?? '',
         phone: optionalString(req.body?.phone, 40) ?? '',
         email: optionalString(req.body?.email, 200) ?? req.user!.email,
         website: optionalString(req.body?.website, 300),
@@ -169,13 +166,19 @@ async function buildNgoProfile(req: AuthRequest, id: string) {
   const ngo = await prisma.nGO.findUnique({
     where: { id },
     include: {
+      // Identity numbers and storage paths are deliberately excluded here.
+      // Only the masked last-four is exposed, and only to the owner or an admin
+      // (filtered below once we know who is asking).
       documents: {
         select: {
           id: true, docType: true, fileName: true, hash: true, status: true,
-          verificationStatus: true, reviewNotes: true, uploadDate: true, verifiedAt: true
+          numberLast4: true, mimeType: true, sizeBytes: true,
+          reviewNotes: true, uploadDate: true, verifiedAt: true
         },
         orderBy: { uploadDate: 'desc' }
       },
+      paymentDetails: true,
+      causes: true,
       govVerification: true,
       projects: {
         include: {
@@ -207,9 +210,32 @@ async function buildNgoProfile(req: AuthRequest, id: string) {
 
   const totalReceived = received._sum.amount ?? 0;
   const totalSpent = spent._sum.amount ?? 0;
+  const privileged = isOwner || isAdmin;
+
+  // Identity documents (Aadhaar, PAN, Voter ID, certificate) are visible only
+  // to the organisation itself and to admins. The public payload omits them
+  // entirely — not merely hidden in the UI, absent from the response.
+  const documents = privileged
+    ? ngo.documents.map(d => ({ ...d, masked: maskIdentity(d.docType, d.numberLast4) }))
+    : [];
+
+  // Donors need somewhere to pay, but never the bank account details.
+  const payment = ngo.paymentDetails
+    ? privileged
+      ? ngo.paymentDetails
+      : {
+          upiId: ngo.paymentDetails.upiId,
+          qrCodeAvailable: Boolean(ngo.paymentDetails.qrCodePath)
+        }
+    : null;
+
+  const { paymentDetails: _omit, ...rest } = ngo as any;
 
   return {
-    ...withSector(ngo),
+    ...withSector(rest),
+    documents,
+    payment,
+    causes: ngo.causes.map(c => c.category),
     finance: {
       totalReceived,
       totalSpent,
@@ -217,185 +243,9 @@ async function buildNgoProfile(req: AuthRequest, id: string) {
       utilisationPercent: totalReceived > 0 ? Math.round((totalSpent / totalReceived) * 100) : 0
     },
     beneficiaryCount,
-    alerts
+    alerts,
+    viewerIsOwner: isOwner,
+    viewerIsAdmin: isAdmin
   };
 }
 
-export const DocumentController = {
-  /**
-   * Stores a document and the SHA-256 digest of its exact contents.
-   *
-   * The payload is retained so a later integrity check can genuinely re-hash it
-   * — the previous implementation echoed the stored digest back, which meant
-   * tampering could never be detected.
-   */
-  upload: handler(async (req: AuthRequest, res: Response) => {
-    const owned = req.body?.ngoId
-      ? await assertNgoAccess(req, res, requireString(req.body.ngoId, 'Organisation', 100))
-      : await currentUserNgo(req);
-
-    if (!owned) {
-      if (!res.headersSent) throw badRequest('Set up your organisation profile before uploading documents.');
-      return;
-    }
-
-    const docType = requireString(req.body?.docType, 'Document type', 40).toUpperCase();
-    if (!DOC_TYPES.includes(docType as any)) {
-      throw badRequest(`Document type must be one of: ${DOC_TYPES.join(', ')}.`);
-    }
-
-    const fileName = requireString(req.body?.fileName, 'File name', 260);
-    // In this build the "file" is a text payload. Real deployments swap this
-    // for the uploaded bytes; the hashing and verification logic is unchanged.
-    const content = optionalString(req.body?.content, 200_000)
-      ?? `${fileName}|${owned.id}|${docType}`;
-
-    const hash = crypto.createHash('sha256').update(content, 'utf8').digest('hex');
-
-    const document = await prisma.nGODocument.create({
-      data: {
-        ngoId: owned.id,
-        docType,
-        fileName,
-        filePath: `/uploads/${owned.id}/${docType.toLowerCase()}-${hash.slice(0, 12)}.pdf`,
-        content,
-        hash,
-        status: 'PENDING',
-        verificationStatus: 'INTEGRITY_VERIFIED'
-      },
-      select: {
-        id: true, ngoId: true, docType: true, fileName: true, filePath: true,
-        hash: true, status: true, verificationStatus: true, uploadDate: true
-      }
-    });
-
-    await logAudit(req.user!.id, req.user!.role, 'UPLOAD_DOCUMENT', 'Documents', document.id,
-      `${fileName} uploaded (SHA-256 ${hash.slice(0, 12)}…)`);
-    await notifyAdmins('Document awaiting review',
-      `${owned.name} uploaded ${fileName}.`, 'INFO', '/admin');
-    await recomputeScores(owned.id);
-
-    return res.status(201).json(document);
-  }),
-
-  /** Re-computes the digest from the stored payload and compares it. */
-  verifyIntegrity: handler(async (req: AuthRequest, res: Response) => {
-    const doc = await prisma.nGODocument.findUnique({ where: { id: req.params.id } });
-    if (!doc) throw notFound('That document could not be found.');
-
-    const recalculatedHash = crypto.createHash('sha256').update(doc.content, 'utf8').digest('hex');
-    const isIntegrityValid = recalculatedHash === doc.hash;
-
-    await logAudit(req.user?.id, req.user?.role ?? 'PUBLIC', 'VERIFY_DOCUMENT', 'Documents', doc.id,
-      `Integrity check on ${doc.fileName}: ${isIntegrityValid ? 'unchanged' : 'MODIFIED'}`);
-
-    return res.json({
-      documentId: doc.id,
-      fileName: doc.fileName,
-      storedHash: doc.hash,
-      recalculatedHash,
-      isIntegrityValid,
-      // Explicit inverse so a client cannot fail open by reading a missing field.
-      isTampered: !isIntegrityValid,
-      message: isIntegrityValid
-        ? 'This document has not been changed since it was uploaded.'
-        : 'Warning: this document does not match its original fingerprint. It may have been altered.'
-    });
-  }),
-
-  /** Auditor decision on a document. */
-  review: handler(async (req: AuthRequest, res: Response) => {
-    const status = requireString(req.body?.status, 'Decision', 30).toUpperCase();
-    if (!['VERIFIED', 'REJECTED', 'REQUIRES_CORRECTION'].includes(status)) {
-      throw badRequest('Decision must be VERIFIED, REJECTED or REQUIRES_CORRECTION.');
-    }
-
-    const doc = await prisma.nGODocument.findUnique({ where: { id: req.params.id }, include: { ngo: true } });
-    if (!doc) throw notFound('That document could not be found.');
-
-    const reviewNotes = optionalString(req.body?.notes, 1000);
-    if (status !== 'VERIFIED' && !reviewNotes) {
-      throw badRequest('Please explain what needs to change so the organisation can fix it.');
-    }
-
-    await prisma.nGODocument.update({
-      where: { id: doc.id },
-      data: { status, reviewNotes, verifiedAt: status === 'VERIFIED' ? new Date() : null }
-    });
-
-    await logAudit(req.user!.id, 'ADMIN', 'REVIEW_DOCUMENT', 'Documents', doc.id,
-      `${doc.fileName} marked ${status}`);
-
-    await notifyNgoOwner(
-      doc.ngoId,
-      status === 'VERIFIED' ? 'Document accepted' : 'Document needs attention',
-      status === 'VERIFIED'
-        ? `${doc.fileName} has been accepted.`
-        : `${doc.fileName}: ${reviewNotes}`,
-      status === 'VERIFIED' ? 'SUCCESS' : 'WARNING',
-      '/ngo/documents'
-    );
-
-    const scores = await recomputeScores(doc.ngoId);
-    return res.json({ message: 'Decision saved.', scores });
-  })
-};
-
-export const GovController = {
-  /**
-   * Runs the simulated NGO Darpan / Income Tax check. Requires ownership: this
-   * writes verification status, so it cannot be an open endpoint.
-   */
-  verify: handler(async (req: AuthRequest, res: Response) => {
-    const owned = req.body?.ngoId
-      ? await assertNgoAccess(req, res, requireString(req.body.ngoId, 'Organisation', 100))
-      : await currentUserNgo(req);
-
-    if (!owned) {
-      if (!res.headersSent) throw badRequest('Set up your organisation profile first.');
-      return;
-    }
-
-    const result = MockGovernmentVerificationService.verify({
-      regNum: owned.regNum,
-      pan: owned.pan,
-      certificate12A: owned.certificate12A,
-      certificate80G: owned.certificate80G
-    });
-
-    await prisma.govVerification.upsert({
-      where: { ngoId: owned.id },
-      update: {
-        regNumStatus: result.regNumStatus,
-        panStatus: result.panStatus,
-        cert12AStatus: result.cert12AStatus,
-        cert80GStatus: result.cert80GStatus,
-        overallStatus: result.overallStatus,
-        notes: result.notes,
-        verifiedAt: new Date()
-      },
-      create: {
-        ngoId: owned.id,
-        regNumStatus: result.regNumStatus,
-        panStatus: result.panStatus,
-        cert12AStatus: result.cert12AStatus,
-        cert80GStatus: result.cert80GStatus,
-        overallStatus: result.overallStatus,
-        notes: result.notes
-      }
-    });
-
-    await logAudit(req.user!.id, req.user!.role, 'GOV_VERIFICATION', 'Government check', owned.id,
-      `Government check for ${owned.name}: ${result.overallStatus}`);
-
-    // A passing government check does not by itself make an NGO public — an
-    // auditor still approves it. This keeps a human in the loop.
-    if (result.overallStatus === 'VERIFIED') {
-      await notifyAdmins('Government check passed',
-        `${owned.name} passed the government check and is ready for final approval.`, 'SUCCESS', '/admin');
-    }
-
-    const scores = await recomputeScores(owned.id);
-    return res.json({ ...result, scores });
-  })
-};

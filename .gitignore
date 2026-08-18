@@ -34,3 +34,6 @@ vite.config.ts.timestamp-*
 # Local runtime logs
 server/server.log
 server/test.log
+
+# Private uploads (identity documents, QR codes, activity photos)
+server/private-uploads/

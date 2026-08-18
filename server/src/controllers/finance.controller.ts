@@ -10,6 +10,7 @@ import { logAudit } from '../lib/audit';
 import { notifyNgoOwner } from '../services/notification.service';
 import { recomputeScores } from '../services/scoring.service';
 import { BlockchainService, GENESIS_HASH } from '../services/blockchain.service';
+import { CAUSE_CATEGORIES } from './ngoAssets.controller';
 
 const prisma = new PrismaClient();
 
@@ -24,87 +25,184 @@ function newTxnId(): string {
 
 export const DonationController = {
   /**
-   * Records a donation and appends it to the hash chain.
+   * Starts a donation.
    *
-   * The block number is read and written inside one transaction, so two
-   * simultaneous donations cannot claim the same slot and fork the chain.
+   * The record is created as PENDING and the organisation's UPI details are
+   * returned so the donor can pay. Nothing is treated as money received until
+   * the donor comes back with a reference — a claim of payment is not payment.
    */
   create: handler(async (req: AuthRequest, res: Response) => {
     const ngoId = requireString(req.body?.ngoId, 'Organisation', 100);
-    const projectId = requireString(req.body?.projectId, 'Project', 100);
     const amount = requireAmount(req.body?.amount, 'Donation amount');
+    const category = optionalString(req.body?.category, 60) ?? 'Other';
 
-    const project = await prisma.project.findUnique({
-      where: { id: projectId },
-      include: { ngo: { select: { id: true, name: true, status: true } } }
+    if (!CAUSE_CATEGORIES.includes(category as any)) {
+      throw badRequest(`Choose a cause from: ${CAUSE_CATEGORIES.join(', ')}.`);
+    }
+
+    const ngo = await prisma.nGO.findUnique({
+      where: { id: ngoId },
+      include: { paymentDetails: true }
     });
 
-    if (!project) throw notFound('That project could not be found.');
-    if (project.ngoId !== ngoId) throw badRequest('That project does not belong to the chosen organisation.');
-    if (project.ngo.status !== 'VERIFIED') {
+    if (!ngo) throw notFound('That organisation could not be found.');
+    if (ngo.status !== 'VERIFIED') {
       throw badRequest('This organisation is not verified yet, so it cannot receive donations.');
     }
 
-    // The donor is always the signed-in account. No guessing, no placeholder ids.
-    const donorId = req.user!.id;
-    const purpose = optionalString(req.body?.purpose, 300) ?? `Support for ${project.title}`;
+    // A project is optional: a donor may give to a cause instead.
+    const projectId = optionalString(req.body?.projectId, 100);
+    if (projectId) {
+      const project = await prisma.project.findUnique({ where: { id: projectId } });
+      if (!project) throw notFound('That project could not be found.');
+      if (project.ngoId !== ngoId) throw badRequest('That project belongs to another organisation.');
+    }
 
-    let result: { donation: unknown; block: unknown; txnId: string } | null = null;
+    if (!ngo.paymentDetails?.upiId && !ngo.paymentDetails?.qrCodePath) {
+      throw badRequest('This organisation has not added payment details yet, so it cannot accept donations.');
+    }
+
+    const donation = await prisma.donation.create({
+      data: {
+        donorId: req.user!.id,
+        ngoId,
+        projectId: projectId ?? null,
+        amount,
+        category,
+        purpose: optionalString(req.body?.purpose, 300) ?? category,
+        paymentMethod: optionalString(req.body?.paymentMethod, 20)?.toUpperCase() ?? 'UPI',
+        paymentStatus: 'PENDING',
+        txnId: newTxnId()
+      }
+    });
+
+    await logAudit(req.user!.id, req.user!.role, 'DONATION_STARTED', 'Money', donation.id,
+      `₹${amount} pledged to ${ngo.name} for ${category}`);
+
+    return res.status(201).json({
+      donation,
+      payTo: {
+        ngoName: ngo.name,
+        upiId: ngo.paymentDetails.upiId,
+        qrCodeAvailable: Boolean(ngo.paymentDetails.qrCodePath),
+        qrCodeUrl: ngo.paymentDetails.qrCodePath ? `/api/ngos/${ngo.id}/qr` : null
+      },
+      instructions: 'Pay using the UPI ID or QR code, then enter your UPI reference number to confirm.'
+    });
+  }),
+
+  /**
+   * Confirms a pending donation with the donor's UPI reference, and appends it
+   * to the record chain. The block is written only now, so the ledger contains
+   * completed donations rather than intentions.
+   */
+  confirm: handler(async (req: AuthRequest, res: Response) => {
+    const referenceId = requireString(req.body?.referenceId, 'UPI reference number', 60);
+    if (referenceId.length < 6) {
+      throw badRequest('That reference number looks too short. Check your payment app.');
+    }
+
+    const donation = await prisma.donation.findUnique({
+      where: { id: req.params.id },
+      include: { ngo: { select: { id: true, name: true } } }
+    });
+
+    if (!donation) throw notFound('That donation could not be found.');
+    if (donation.donorId !== req.user!.id && req.user!.role !== 'ADMIN') {
+      throw forbidden('You can only confirm your own donations.');
+    }
+    if (donation.paymentStatus === 'SUCCESSFUL') {
+      throw badRequest('This donation has already been confirmed.');
+    }
+
+    const duplicate = await prisma.donation.findFirst({
+      where: { referenceId, paymentStatus: 'SUCCESSFUL', id: { not: donation.id } },
+      select: { id: true }
+    });
+    if (duplicate) throw badRequest('That reference number has already been used.');
+
+    let blockNumber = 0;
 
     for (let attempt = 0; attempt < BLOCK_WRITE_ATTEMPTS; attempt++) {
-      const txnId = newTxnId();
       try {
-        result = await prisma.$transaction(async tx => {
+        blockNumber = await prisma.$transaction(async tx => {
           const latest = await tx.blockchainBlock.findFirst({
             orderBy: { blockNumber: 'desc' },
             select: { blockNumber: true, currentHash: true }
           });
 
-          const blockNumber = (latest?.blockNumber ?? 0) + 1;
+          const nextNumber = (latest?.blockNumber ?? 0) + 1;
           const prevHash = latest?.currentHash ?? GENESIS_HASH;
           const timestamp = new Date();
 
           const currentHash = BlockchainService.calculateHash({
-            blockNumber, prevHash, txnId, amount, donorId, ngoId, projectId, timestamp
+            blockNumber: nextNumber,
+            prevHash,
+            txnId: donation.txnId,
+            amount: donation.amount,
+            donorId: donation.donorId,
+            ngoId: donation.ngoId,
+            projectId: donation.projectId ?? '',
+            timestamp
           });
 
           const block = await tx.blockchainBlock.create({
-            data: { blockNumber, prevHash, currentHash, txnId, amount, donorId, ngoId, projectId, timestamp }
+            data: {
+              blockNumber: nextNumber,
+              prevHash,
+              currentHash,
+              txnId: donation.txnId,
+              amount: donation.amount,
+              donorId: donation.donorId,
+              ngoId: donation.ngoId,
+              projectId: donation.projectId,
+              timestamp
+            }
           });
 
-          const donation = await tx.donation.create({
-            data: { donorId, ngoId, projectId, amount, purpose, txnId, blockId: block.id, date: timestamp }
+          await tx.donation.update({
+            where: { id: donation.id },
+            data: {
+              paymentStatus: 'SUCCESSFUL',
+              referenceId,
+              blockId: block.id,
+              date: timestamp
+            }
           });
 
-          return { donation, block, txnId };
+          return nextNumber;
         });
         break;
       } catch (err) {
-        // P2002 = unique constraint. Another donation took the slot; try again.
         const isRace = err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
         if (!isRace || attempt === BLOCK_WRITE_ATTEMPTS - 1) throw err;
       }
     }
 
-    if (!result) throw badRequest('The ledger is busy right now. Please try again.');
+    await logAudit(req.user!.id, req.user!.role, 'DONATION_CONFIRMED', 'Money', donation.id,
+      `₹${donation.amount} to ${donation.ngo.name} confirmed (ref ${referenceId})`);
 
-    await logAudit(donorId, req.user!.role, 'DONATION', 'Money', (result.donation as any).id,
-      `₹${amount} donated to ${project.title} (${result.txnId})`);
+    await notifyNgoOwner(donation.ngoId, 'You received a donation',
+      `₹${donation.amount.toLocaleString('en-IN')} was donated for ${donation.category}.`,
+      'SUCCESS', '/ngo/donations');
 
-    await notifyNgoOwner(ngoId, 'You received a donation',
-      `₹${amount.toLocaleString('en-IN')} was donated to "${project.title}".`, 'SUCCESS', '/ngo/money');
+    await recomputeScores(donation.ngoId);
 
-    await recomputeScores(ngoId);
+    const updated = await prisma.donation.findUnique({
+      where: { id: donation.id },
+      include: { block: { select: { blockNumber: true, currentHash: true } } }
+    });
 
-    return res.status(201).json(result);
+    return res.json({ donation: updated, blockNumber, message: 'Thank you. Your donation is recorded.' });
   }),
 
-  /** Donation history. Donors see their own; NGOs see money received. */
+  /** Donation history. Donors see their own; organisations see money received. */
   list: handler(async (req: AuthRequest, res: Response) => {
-    const { ngoId, projectId } = req.query;
+    const { ngoId, projectId, status } = req.query;
     const where: any = {};
 
     if (typeof projectId === 'string' && projectId) where.projectId = projectId;
+    if (typeof status === 'string' && status) where.paymentStatus = status.toUpperCase();
 
     if (req.user?.role === 'ADMIN') {
       if (typeof ngoId === 'string' && ngoId) where.ngoId = ngoId;
@@ -121,6 +219,7 @@ export const DonationController = {
       include: {
         ngo: { select: { id: true, name: true } },
         project: { select: { id: true, title: true } },
+        donor: req.user?.role === 'DONOR' ? false : { select: { id: true, name: true } },
         block: { select: { blockNumber: true, currentHash: true } }
       },
       orderBy: { date: 'desc' },

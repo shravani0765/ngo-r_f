@@ -5,10 +5,16 @@ import { handler, badRequest, notFound, requireString, optionalString } from '..
 import { logAudit } from '../lib/audit';
 import { notifyNgoOwner } from '../services/notification.service';
 import { recomputeScores } from '../services/scoring.service';
+import { maskIdentity } from '../services/identity.service';
 
 const prisma = new PrismaClient();
 
-const DECISIONS = ['VERIFIED', 'REJECTED', 'REQUIRES_CORRECTION'] as const;
+const DECISIONS = [
+  'VERIFIED', 'REJECTED', 'REQUIRES_CORRECTION', 'UNDER_REVIEW', 'SUSPENDED'
+] as const;
+
+/** Decisions that require the admin to explain themselves. */
+const NEEDS_REASON = ['REJECTED', 'REQUIRES_CORRECTION', 'SUSPENDED'];
 
 export const AdminController = {
   /** Live platform counts. Every figure is a real query — no placeholders. */
@@ -112,7 +118,7 @@ export const AdminController = {
     }
 
     const notes = optionalString(req.body?.notes, 1000);
-    if (decision !== 'VERIFIED' && !notes) {
+    if (NEEDS_REASON.includes(decision) && !notes) {
       throw badRequest('Please explain the decision so the organisation knows what to fix.');
     }
 
@@ -123,26 +129,25 @@ export const AdminController = {
       where: { id: ngo.id },
       data: {
         status: decision,
-        verifiedAt: decision === 'VERIFIED' ? new Date() : null
+        statusReason: notes ?? null,
+        verifiedAt: decision === 'VERIFIED' ? new Date() : ngo.verifiedAt,
+        suspendedAt: decision === 'SUSPENDED' ? new Date() : null
       }
     });
-
-    if (notes) {
-      await prisma.govVerification.upsert({
-        where: { ngoId: ngo.id },
-        update: { notes },
-        create: { ngoId: ngo.id, notes, overallStatus: decision === 'VERIFIED' ? 'VERIFIED' : 'REQUIRES_REVIEW' }
-      });
-    }
 
     await logAudit(req.user!.id, 'ADMIN', 'NGO_DECISION', 'Verification', ngo.id,
       `${ngo.name} marked ${decision}${notes ? `: ${notes}` : ''}`);
 
-    const messages: Record<string, { title: string; body: string; type: 'SUCCESS' | 'WARNING' | 'DANGER' }> = {
+    const messages: Record<string, { title: string; body: string; type: 'SUCCESS' | 'WARNING' | 'DANGER' | 'INFO' }> = {
       VERIFIED: {
         title: 'Your organisation is verified',
-        body: 'You are now listed in the public directory and can receive donations.',
+        body: 'You are now listed publicly and can receive donations.',
         type: 'SUCCESS'
+      },
+      UNDER_REVIEW: {
+        title: 'Your organisation is being reviewed',
+        body: 'An admin is checking your documents now.',
+        type: 'INFO'
       },
       REQUIRES_CORRECTION: {
         title: 'Changes needed before we can verify you',
@@ -153,15 +158,181 @@ export const AdminController = {
         title: 'Your verification was not approved',
         body: notes ?? 'Please contact the platform team.',
         type: 'DANGER'
+      },
+      SUSPENDED: {
+        title: 'Your organisation has been suspended',
+        body: notes ?? 'Please contact the platform team.',
+        type: 'DANGER'
       }
     };
 
     const msg = messages[decision];
-    await notifyNgoOwner(ngo.id, msg.title, msg.body, msg.type, '/ngo');
+    await notifyNgoOwner(ngo.id, msg.title, msg.body, msg.type as any, '/ngo');
 
     const scores = await recomputeScores(ngo.id);
 
-    return res.json({ message: `${ngo.name} marked ${decision.toLowerCase().replace('_', ' ')}.`, scores });
+    return res.json({
+      message: `${ngo.name} marked ${decision.toLowerCase().replace(/_/g, ' ')}.`,
+      scores
+    });
+  }),
+
+  /** Full organisation table for the admin management screen. */
+  listNgos: handler(async (req: AuthRequest, res: Response) => {
+    const { status, search } = req.query;
+
+    const where: any = {};
+    if (typeof status === 'string' && status) where.status = status.toUpperCase();
+    if (typeof search === 'string' && search.trim()) {
+      const q = search.trim();
+      where.OR = [
+        { name: { contains: q, mode: 'insensitive' } },
+        { regNum: { contains: q, mode: 'insensitive' } },
+        { presidentName: { contains: q, mode: 'insensitive' } },
+        { city: { contains: q, mode: 'insensitive' } }
+      ];
+    }
+
+    const ngos = await prisma.nGO.findMany({
+      where,
+      select: {
+        id: true, name: true, presidentName: true, city: true, state: true,
+        phone: true, email: true, status: true, statusReason: true,
+        transparencyScore: true, createdAt: true, verifiedAt: true,
+        _count: { select: { documents: true, activities: true } }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    const totals = await prisma.donation.groupBy({
+      by: ['ngoId'],
+      _sum: { amount: true },
+      _count: { _all: true },
+      where: { paymentStatus: 'SUCCESSFUL' }
+    });
+    const byNgo = new Map(totals.map(t => [t.ngoId, t]));
+
+    return res.json(ngos.map(n => ({
+      ...n,
+      totalDonations: byNgo.get(n.id)?._sum.amount ?? 0,
+      donationCount: byNgo.get(n.id)?._count._all ?? 0
+    })));
+  }),
+
+  /** Everything an admin needs to make a decision on one organisation. */
+  ngoDetail: handler(async (req: AuthRequest, res: Response) => {
+    const ngo = await prisma.nGO.findUnique({
+      where: { id: req.params.id },
+      include: {
+        user: { select: { id: true, name: true, email: true, createdAt: true } },
+        documents: { orderBy: { uploadDate: 'desc' } },
+        paymentDetails: true,
+        causes: true,
+        activities: { orderBy: { createdAt: 'desc' } }
+      }
+    });
+
+    if (!ngo) throw notFound('That organisation could not be found.');
+
+    const [received, donationCount] = await Promise.all([
+      prisma.donation.aggregate({
+        where: { ngoId: ngo.id, paymentStatus: 'SUCCESSFUL' },
+        _sum: { amount: true }
+      }),
+      prisma.donation.count({ where: { ngoId: ngo.id, paymentStatus: 'SUCCESSFUL' } })
+    ]);
+
+    // Admins may see identity numbers only in masked form. The full number is
+    // never reconstructable — only a hash of it was ever stored.
+    const documents = ngo.documents.map(d => ({
+      id: d.id,
+      docType: d.docType,
+      fileName: d.fileName,
+      status: d.status,
+      reviewNotes: d.reviewNotes,
+      uploadDate: d.uploadDate,
+      mimeType: d.mimeType,
+      sizeBytes: d.sizeBytes,
+      hash: d.hash,
+      masked: maskIdentity(d.docType, d.numberLast4)
+    }));
+
+    const { documents: _d, ...rest } = ngo as any;
+
+    return res.json({
+      ...rest,
+      documents,
+      causes: ngo.causes.map(c => c.category),
+      totalDonations: received._sum.amount ?? 0,
+      donationCount
+    });
+  }),
+
+  /**
+   * Removes an organisation.
+   *
+   * Suspension is preferred and is what the UI offers first. A hard delete is
+   * refused once money has moved, because that would destroy transaction
+   * history that the ledger and the donors depend on.
+   */
+  removeNgo: handler(async (req: AuthRequest, res: Response) => {
+    const ngo = await prisma.nGO.findUnique({ where: { id: req.params.id } });
+    if (!ngo) throw notFound('That organisation could not be found.');
+
+    const donationCount = await prisma.donation.count({ where: { ngoId: ngo.id } });
+    if (donationCount > 0) {
+      throw badRequest(
+        `${ngo.name} has ${donationCount} donation record${donationCount === 1 ? '' : 's'}. ` +
+        'Suspend it instead — deleting would destroy records donors rely on.'
+      );
+    }
+
+    await prisma.nGO.delete({ where: { id: ngo.id } });
+    await logAudit(req.user!.id, 'ADMIN', 'NGO_DELETED', 'Organisations', ngo.id,
+      `${ngo.name} permanently removed (had no donations)`);
+
+    return res.json({ message: `${ngo.name} has been removed.` });
+  }),
+
+  /** Transaction ledger for the admin, with filters. */
+  transactions: handler(async (req: AuthRequest, res: Response) => {
+    const { status, ngoId, category, from, to, minAmount } = req.query;
+
+    const where: any = {};
+    if (typeof status === 'string' && status) where.paymentStatus = status.toUpperCase();
+    if (typeof ngoId === 'string' && ngoId) where.ngoId = ngoId;
+    if (typeof category === 'string' && category) where.category = category;
+    if (typeof minAmount === 'string' && minAmount) where.amount = { gte: Number(minAmount) || 0 };
+
+    if (typeof from === 'string' && from) {
+      where.date = { ...(where.date ?? {}), gte: new Date(from) };
+    }
+    if (typeof to === 'string' && to) {
+      where.date = { ...(where.date ?? {}), lte: new Date(to) };
+    }
+
+    const [items, totals] = await Promise.all([
+      prisma.donation.findMany({
+        where,
+        include: {
+          donor: { select: { id: true, name: true, email: true } },
+          ngo: { select: { id: true, name: true } },
+          block: { select: { blockNumber: true } }
+        },
+        orderBy: { date: 'desc' },
+        take: 300
+      }),
+      prisma.donation.groupBy({ by: ['paymentStatus'], _sum: { amount: true }, _count: { _all: true } })
+    ]);
+
+    return res.json({
+      items,
+      summary: totals.map(t => ({
+        status: t.paymentStatus,
+        count: t._count._all,
+        amount: t._sum.amount ?? 0
+      }))
+    });
   }),
 
   auditLogs: handler(async (req: AuthRequest, res: Response) => {

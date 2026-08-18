@@ -1,6 +1,6 @@
 datasource db {
-  provider = "sqlite"
-  url      = "file:./dev.db"
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 generator client {
@@ -21,6 +21,21 @@ model User {
   donations             Donation[]
   auditLogs             AuditLog[]
   notifications         Notification[]
+  passwordResets        PasswordResetToken[]
+}
+
+/// Single-use token for the email password-reset flow. Only a hash of the token
+/// is stored, so a leaked database row cannot be used to reset an account.
+model PasswordResetToken {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
 }
 
 model NGO {
@@ -28,30 +43,40 @@ model NGO {
   userId           String   @unique
   user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   name             String
+  description      String   @default("")
+  /// Adhyaksha / President / Head of the organisation.
+  presidentName    String   @default("")
   regNum           String   @unique
-  pan              String
-  certificate12A   String
-  certificate80G   String
   csrReg           String?
   address          String
+  city             String   @default("")
   state            String
   district         String
+  pinCode          String   @default("")
   phone            String
   email            String
   website          String?
+  logoUrl          String?
   mission          String
   areaOfWork       String
   establishedYear  Int
   employees        Int      @default(0)
   volunteers       Int      @default(0)
-  status           String   @default("PENDING") // PENDING, VERIFIED, REJECTED, REQUIRES_CORRECTION
+  /// PENDING, UNDER_REVIEW, VERIFIED, REJECTED, REQUIRES_CORRECTION, SUSPENDED
+  status           String   @default("PENDING")
+  /// Why an admin rejected or suspended the organisation, shown back to them.
+  statusReason     String?
   transparencyScore Int     @default(50)
   fraudRiskScore    Int     @default(10)
   verifiedAt       DateTime?
+  suspendedAt      DateTime?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
   documents            NGODocument[]
+  paymentDetails       NGOPaymentDetails?
+  causes               NGOCause[]
+  activities           NGOActivity[]
   govVerification      GovVerification?
   projects             Project[]
   beneficiaries        Beneficiary[]
@@ -61,35 +86,101 @@ model NGO {
   fraudAlerts          FraudAlert[]
   transparencyScores   TransparencyScore[]
   whistleblowerReports WhistleblowerReport[]
+
+  @@index([status])
 }
 
+/// Uploaded files, covering both identity documents (Aadhaar, PAN, Voter ID,
+/// government certificate) and supporting paperwork.
+///
+/// Identity numbers are never stored in full: only a salted hash for duplicate
+/// detection plus the last four characters for masked display.
 model NGODocument {
   id                 String    @id @default(uuid())
   ngoId              String
   ngo                NGO       @relation(fields: [ngoId], references: [id], onDelete: Cascade)
-  docType            String    // REGISTRATION, PAN, 12A, 80G, AUDIT_REPORT, ANNUAL_REPORT, BANK_DOC
+  /// AADHAAR, PAN, VOTER_ID, GOV_CERTIFICATE, REGISTRATION, AUDIT_REPORT, ANNUAL_REPORT, BANK_DOC
+  docType            String
+  /// Salted hash of the identity number. Null for documents without a number.
+  numberHash         String?
+  /// Last four characters, for display as "XXXX XXXX 1234".
+  numberLast4        String?
   fileName           String
-  filePath           String
-  // The exact bytes the hash was computed over. Kept so integrity checks can
-  // genuinely re-hash the stored payload instead of echoing the stored digest.
-  content            String
+  /// Path inside the private uploads directory. Never served directly.
+  storagePath        String
+  mimeType           String    @default("application/octet-stream")
+  sizeBytes          Int       @default(0)
+  /// SHA-256 of the stored file, so tampering is detectable.
   hash               String
-  status             String    @default("PENDING") // PENDING, VERIFIED, REJECTED, REQUIRES_CORRECTION
-  verificationStatus String    @default("INTEGRITY_VERIFIED")
+  /// PENDING, UNDER_REVIEW, VERIFIED, REJECTED
+  status             String    @default("PENDING")
   reviewNotes        String?
   uploadDate         DateTime  @default(now())
   verifiedAt         DateTime?
+
+  @@index([ngoId, docType])
+  @@index([status])
 }
 
+/// Where donors send money. UPI is sufficient for the first version; bank
+/// details are optional and are never shown publicly in full.
+model NGOPaymentDetails {
+  id                String   @id @default(uuid())
+  ngoId             String   @unique
+  ngo               NGO      @relation(fields: [ngoId], references: [id], onDelete: Cascade)
+  upiId             String?
+  qrCodePath        String?
+  bankAccountName   String?
+  /// Stored masked: only the last four digits are retained.
+  accountNumberLast4 String?
+  ifsc              String?
+  updatedAt         DateTime @updatedAt
+}
+
+/// A cause an organisation works on, used for browsing and filtering.
+model NGOCause {
+  id        String   @id @default(uuid())
+  ngoId     String
+  ngo       NGO      @relation(fields: [ngoId], references: [id], onDelete: Cascade)
+  category  String
+  createdAt DateTime @default(now())
+
+  @@unique([ngoId, category])
+  @@index([category])
+}
+
+/// Photographic proof of how donations were used. Appears publicly only once
+/// an admin approves it and the organisation itself is verified.
+model NGOActivity {
+  id          String   @id @default(uuid())
+  ngoId       String
+  ngo         NGO      @relation(fields: [ngoId], references: [id], onDelete: Cascade)
+  title       String
+  description String
+  category    String
+  imagePath   String
+  activityDate DateTime
+  /// PENDING, APPROVED, REJECTED
+  status      String   @default("PENDING")
+  reviewNotes String?
+  createdAt   DateTime @default(now())
+
+  @@index([ngoId])
+  @@index([status, category])
+}
+
+/// Outcome of the admin's manual document review. Tax-exemption certificates
+/// (12A / 80G) are deliberately not part of this system.
 model GovVerification {
   id             String    @id @default(uuid())
   ngoId          String    @unique
   ngo            NGO       @relation(fields: [ngoId], references: [id], onDelete: Cascade)
-  regNumStatus   String    @default("VERIFIED") // VERIFIED, PENDING, FAILED
-  panStatus      String    @default("VERIFIED")
-  cert12AStatus  String    @default("VERIFIED")
-  cert80GStatus  String    @default("VERIFIED")
-  overallStatus  String    @default("VERIFIED") // VERIFIED, PENDING, FAILED, REQUIRES_REVIEW
+  regNumStatus   String    @default("PENDING") // VERIFIED, PENDING, FAILED
+  panStatus      String    @default("PENDING")
+  aadhaarStatus  String    @default("PENDING")
+  voterIdStatus  String    @default("PENDING")
+  certificateStatus String @default("PENDING")
+  overallStatus  String    @default("PENDING") // VERIFIED, PENDING, FAILED, REQUIRES_REVIEW
   verifiedAt     DateTime  @default(now())
   notes          String?
 }
@@ -168,15 +259,27 @@ model Donation {
   donor         User     @relation(fields: [donorId], references: [id], onDelete: Cascade)
   ngoId         String
   ngo           NGO      @relation(fields: [ngoId], references: [id], onDelete: Cascade)
-  projectId     String
-  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  /// Optional: a donor may give to a cause without picking a specific project.
+  projectId     String?
+  project       Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
   amount        Float
   date          DateTime @default(now())
   purpose       String
-  paymentStatus String   @default("COMPLETED")
+  /// What the donation is for, e.g. "Free Education" or "Medical Support".
+  category      String   @default("Other")
+  /// UPI, QR, GATEWAY
+  paymentMethod String   @default("UPI")
+  /// The UPI reference the donor pastes back after paying.
+  referenceId   String?
+  /// PENDING, SUCCESSFUL, FAILED
+  paymentStatus String   @default("PENDING")
   txnId         String   @unique
   blockId       String?  @unique
   block         BlockchainBlock? @relation(fields: [blockId], references: [id])
+
+  @@index([ngoId, paymentStatus])
+  @@index([donorId])
+  @@index([category])
 }
 
 model Expense {
@@ -203,8 +306,9 @@ model BlockchainBlock {
   donorId     String
   ngoId       String
   ngo         NGO      @relation(fields: [ngoId], references: [id], onDelete: Cascade)
-  projectId   String
-  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  /// Optional, mirroring Donation: a gift may target a cause rather than a project.
+  projectId   String?
+  project     Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
   timestamp   DateTime @default(now())
 
   donation    Donation?

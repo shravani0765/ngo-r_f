@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import {
   AuthRequest,
   JWT_SECRET,
@@ -11,6 +12,7 @@ import {
 import { handler, badRequest, requireString, optionalString } from '../lib/http';
 import { logAudit } from '../lib/audit';
 import { notify, notifyAdmins } from '../services/notification.service';
+import { sendPasswordResetEmail, isEmailConfigured } from '../services/email.service';
 
 const prisma = new PrismaClient();
 
@@ -100,22 +102,25 @@ export const AuthController = {
           data: {
             userId: created.id,
             name: optionalString(org.name, 200) ?? name,
+            description: optionalString(org.description, 2000) ?? '',
+            presidentName: optionalString(org.presidentName, 200) ?? '',
             regNum,
-            pan: optionalString(org.pan, 40) ?? '',
-            certificate12A: optionalString(org.certificate12A, 80) ?? '',
-            certificate80G: optionalString(org.certificate80G, 80) ?? '',
             csrReg: optionalString(org.csrReg, 80),
             address: optionalString(org.address, 500) ?? '',
+            city: optionalString(org.city, 100) ?? '',
             state: optionalString(org.state, 100) ?? '',
-            district: optionalString(org.district, 100) ?? '',
+            district: optionalString(org.district, 100) ?? optionalString(org.city, 100) ?? '',
+            pinCode: optionalString(org.pinCode, 10) ?? '',
             phone: optionalString(org.phone, 40) ?? optionalString(req.body?.phone, 40) ?? '',
             email: optionalString(org.email, 200) ?? email,
             website: optionalString(org.website, 300),
-            mission: optionalString(org.mission, 2000) ?? '',
+            mission: optionalString(org.mission, 2000) ?? optionalString(org.description, 2000) ?? '',
             areaOfWork: optionalString(org.areaOfWork, 300) ?? 'General social welfare',
             establishedYear: Number(org.establishedYear) || new Date().getFullYear(),
             employees: Math.max(0, Number(org.employees) || 0),
             volunteers: Math.max(0, Number(org.volunteers) || 0),
+            // Every new organisation starts unverified and stays invisible to
+            // the public until an admin approves it.
             status: 'PENDING'
           }
         });
@@ -182,6 +187,86 @@ export const AuthController = {
     });
 
     return res.json({ user: publicUser(user), unreadCount });
+  }),
+
+  /**
+   * Starts a password reset.
+   *
+   * Always answers the same way whether or not the address is registered — a
+   * differing response would let anyone test which emails have accounts.
+   * Only a hash of the token is stored, so the database alone cannot reset it.
+   */
+  forgotPassword: handler(async (req: AuthRequest, res: Response) => {
+    const email = requireString(req.body?.email, 'Email address', 200).toLowerCase();
+    const sameAnswer = {
+      message: 'If that email has an account, a reset link is on its way. Check your inbox.'
+    };
+
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user) return res.json(sameAnswer);
+
+    const token = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+
+    // Any earlier unused tokens are invalidated.
+    await prisma.passwordResetToken.deleteMany({ where: { userId: user.id, usedAt: null } });
+
+    await prisma.passwordResetToken.create({
+      data: {
+        userId: user.id,
+        tokenHash,
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000) // one hour
+      }
+    });
+
+    const link = `${process.env.APP_URL ?? 'http://localhost:5173'}/reset-password?token=${token}`;
+    await sendPasswordResetEmail(user.email, user.name, link);
+
+    await logAudit(user.id, user.role, 'PASSWORD_RESET_REQUESTED', 'Accounts', user.id,
+      'Password reset requested');
+
+    // Without a mail provider configured the link is returned so the flow is
+    // still demonstrable. This never happens once SMTP is set up.
+    const response: Record<string, unknown> = { ...sameAnswer };
+    if (!isEmailConfigured()) response.devResetLink = link;
+
+    return res.json(response);
+  }),
+
+  /** Completes a reset using a token from the emailed link. */
+  resetPassword: handler(async (req: AuthRequest, res: Response) => {
+    const token = requireString(req.body?.token, 'Reset token', 200);
+    const newPassword = requireString(req.body?.newPassword, 'New password', 200);
+
+    if (newPassword.length < MIN_PASSWORD) {
+      throw badRequest(`Password must be at least ${MIN_PASSWORD} characters.`);
+    }
+
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    const record = await prisma.passwordResetToken.findUnique({
+      where: { tokenHash },
+      include: { user: true }
+    });
+
+    if (!record || record.usedAt || record.expiresAt < new Date()) {
+      throw badRequest('That reset link is invalid or has expired. Please request a new one.');
+    }
+
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: record.userId },
+        data: { password: await bcrypt.hash(newPassword, 10) }
+      }),
+      prisma.passwordResetToken.update({
+        where: { id: record.id },
+        data: { usedAt: new Date() }
+      })
+    ]);
+
+    await logAudit(record.userId, record.user.role, 'PASSWORD_RESET', 'Accounts', record.userId,
+      'Password reset completed');
+
+    return res.json({ message: 'Your password has been changed. You can sign in now.' });
   }),
 
   changePassword: handler(async (req: AuthRequest, res: Response) => {

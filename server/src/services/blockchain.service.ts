@@ -10,7 +10,8 @@ export interface BlockData {
   amount: number;
   donorId: string;
   ngoId: string;
-  projectId: string;
+  /** Null when the donor gave to a cause rather than a specific project. */
+  projectId: string | null;
   timestamp: string | Date;
 }
 
@@ -36,7 +37,7 @@ export class BlockchainService {
       data.amount,
       data.donorId,
       data.ngoId,
-      data.projectId,
+      data.projectId ?? '',
       new Date(data.timestamp).toISOString()
     ].join(':');
 
