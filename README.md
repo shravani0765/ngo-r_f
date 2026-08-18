@@ -1,44 +1,67 @@
 # NGO Impact Data Commons
 
-> **"Verified Impact. Transparent Funds. Trusted NGOs."**
+> **"Verified organisations. Traceable donations."**
 
-A full-stack platform for NGO verification, tamper-evident donation tracking, duplicate
-beneficiary detection, and public transparency reporting.
+A platform where NGOs register and get verified by a real person, donors give by UPI
+and can see exactly where the money went, and the public can browse proof of the work.
 
 ---
 
-## Quick start
+## Setup
 
-You need Node.js 18+. Three commands, in order.
+### What you need first
 
-### 1. Set up the database (first run only)
+- **Node.js 18 or newer** — https://nodejs.org
+- **Docker Desktop** — https://docker.com/products/docker-desktop
+  (this runs the PostgreSQL database; it does **not** install itself)
+
+> **Start Docker Desktop and wait until it says "Running" before continuing.**
+> Nothing below works while Docker is stopped.
+
+### Steps
+
+Run these in order from the project folder.
+
+**1. Start the database**
+
+```bash
+docker compose up -d
+```
+
+**2. Set up the server**
 
 ```bash
 cd server
 npm install
-npx prisma db push      # create the SQLite database
-npm run db:seed         # load demo organisations, projects and donations
+cp .env.example .env     # Windows: copy .env.example .env
+npx prisma db push       # create the tables
+npm run db:seed          # load the demo data
+npm run dev              # starts on port 5001 — leave this running
 ```
 
-### 2. Start the backend (port 5001)
-
-```bash
-cd server
-npm run dev
-```
-
-### 3. Start the frontend (port 5173)
+**3. Set up the app (in a second terminal)**
 
 ```bash
 cd client
 npm install
-npm run dev
+npm run dev              # starts on port 5173
 ```
 
-Open **http://localhost:5173**.
+**4. Open it**
 
-> If you skip `npm run db:seed`, the app will load but every page will be empty —
-> that is expected, not a bug. The platform never invents figures it does not have.
+http://localhost:5173
+
+---
+
+### If something goes wrong
+
+| Problem | Fix |
+|---|---|
+| `Can't reach database server at localhost:5433` | Docker Desktop is not running. Start it, then `docker compose up -d` |
+| `Environment variable not found: DATABASE_URL` | You skipped `cp .env.example .env` |
+| Every page is empty | You skipped `npm run db:seed` |
+| Port 5433 already in use | Change the host port in `docker-compose.yml` and in `DATABASE_URL` |
+| Want to start over | `docker compose down -v` then repeat from step 1 |
 
 ---
 
@@ -48,62 +71,51 @@ The sign-in page has one-click buttons for each of these.
 
 | Role | Email | Password |
 |---|---|---|
-| **Auditor (admin)** | `admin@ngocommons.demo` | `Admin@123` |
-| **NGO** | `ngo@ngocommons.demo` | `NGO@1234` |
+| **Admin** | `admin@ngocommons.demo` | `Admin@123` |
+| **NGO** (verified) | `ngo@ngocommons.demo` | `NGO@1234` |
+| **NGO** (pending) | `newngo@ngocommons.demo` | `NGO@1234` |
 | **Donor** | `donor@ngocommons.demo` | `Donor@123` |
 | **Public** | `public@ngocommons.demo` | `Public@123` |
 
 Admin accounts cannot be created through sign-up — they exist only in the seed.
+The pending NGO is there so the approval flow can be demonstrated immediately.
 
 ---
 
 ## What it does
 
-1. **Role-based access.** NGO, Donor, Public and Auditor roles. Every write is checked
-   against the signed-in account, so an organisation can only edit its own records.
+1. **Registration in five steps.** Organisation details, contact, login, causes, review —
+   validated one step at a time rather than as one long form.
 
-2. **Government credential check.** Simulates NGO Darpan, PAN, 12A and 80G lookups. Passing
-   the check is not enough on its own — a human auditor still approves an organisation
-   before it becomes publicly visible.
+2. **Identity documents.** Aadhaar, PAN, Voter ID and a government NGO certificate are
+   uploaded as JPG, PNG or PDF. **Full numbers are never stored** — only a salted hash
+   for duplicate detection and the last four characters for masked display
+   (`XXXX XXXX 1234`). Aadhaar is checked with the Verhoeff checksum.
 
-3. **Document integrity.** A SHA-256 digest is computed over each document's contents and
-   stored alongside it. The "check it is unchanged" action re-hashes the stored payload and
-   compares, so alteration is genuinely detectable.
+3. **Documents stay private.** Files are written outside the web root and can only be
+   opened through an authenticated endpoint that checks you own the document or are an
+   admin. The public API response omits them entirely rather than hiding them in the UI.
 
-4. **Tamper-evident donation ledger.** Each donation is written as a record containing the
-   previous record's hash (`currentHash = SHA256(blockNumber : prevHash : txnId : amount :
-   donorId : ngoId : projectId : timestamp)`). Editing any past record breaks every link
-   after it. Anyone can re-verify the whole chain from the Fund Records page.
+4. **Manual verification.** An admin reviews each organisation and approves, asks for
+   changes, rejects or suspends it — with a reason that is sent to the organisation.
+   Nothing appears publicly until it is approved.
 
-5. **Impact Integrity Engine.** A transparent, rule-based anomaly scan producing a fraud
-   risk score (0–100) from seven signals: government status, document backlog, duplicate
-   beneficiaries, spending vs income, geographic consistency of evidence, community
-   disputes, and beneficiary over-reporting. Every flag states its reason and its fix.
+5. **UPI donations.** The donor picks a cause and amount, pays using the organisation's
+   UPI ID or QR code, then enters the UPI reference to confirm. Only then is the
+   donation recorded, so a claim of payment is never mistaken for payment.
 
-6. **Duplicate beneficiary detection.** Each person gets a unique ID. New records are scored
-   against existing ones — including other organisations' — on name similarity, location,
-   age and gender. High-confidence duplicates are blocked at save time with an explicit
-   override, rather than silently recorded.
+6. **Tamper-evident record chain.** Each confirmed donation is written as a record
+   containing the previous record's hash. Changing any past record breaks every link
+   after it, and anyone can re-verify the whole chain from the Fund Records page.
 
-7. **Geo-tagged field evidence.** Photos carry coordinates and a before/progress/after
-   phase. Distance from the project's declared site is computed on upload and flagged when
-   implausible.
+7. **Impact gallery.** Organisations upload photos of their work with a title,
+   description, date and category. An admin approves each one before it appears publicly.
 
-8. **Transparency score (0–100).** Government registration (25) + documents reviewed (25) +
-   money trail (25) + project evidence (15) + community feedback (10), minus up to 20 for
-   open risk flags. Recomputed automatically whenever underlying data changes.
+8. **Admin panel.** Organisation table with search and filters, document and photo
+   approval queues, a transaction ledger, and suspend / reactivate / delete.
 
-9. **Community verification.** Anyone who was there can confirm or dispute what an NGO
-   claims about a project. Disputes reduce the transparency score and alert an auditor.
-
-10. **Anonymous reporting.** Concerns can be submitted with no account and nothing recorded
-    about the reporter. A tracking code lets the reporter follow the outcome.
-
-11. **Notifications and audit log.** Organisations are told when documents are accepted,
-    changes are needed, or risk flags are raised. All privileged actions are logged.
-
-12. **Open REST API.** `/api/public/ngos`, `/api/public/projects`, `/api/public/ledger`,
-    `/api/public/statistics` — read-only JSON, no key required.
+9. **Password reset by email.** Single-use tokens, hashed before storage, valid for one
+   hour. No OTP. Works without an email provider by printing the link to the console.
 
 ---
 
@@ -111,34 +123,31 @@ Admin accounts cannot be created through sign-up — they exist only in the seed
 
 - **Frontend:** React 18, TypeScript, Tailwind CSS, React Router
 - **Backend:** Node.js, Express, TypeScript
-- **Database:** SQLite via Prisma ORM
-- **Hashing:** SHA-256 (Node `crypto`)
-- **Auth:** JWT with bcrypt password hashing
+- **Database:** PostgreSQL 16 (Docker) via Prisma ORM
+- **Uploads:** multer, stored on disk outside the web root
+- **Security:** JWT auth, bcrypt password hashing, SHA-256 file and record hashing
 
 ---
 
 ## Flow
 
 ```
-REGISTER / SIGN IN
+REGISTER (5 steps)
        │
        ▼
-UPLOAD DOCUMENTS  ──▶  SHA-256 DIGEST STORED
+UPLOAD DOCUMENTS  ──▶  SHA-256 FINGERPRINT STORED
+       │                Aadhaar/PAN/Voter ID hashed, only last 4 kept
+       ▼
+ADD UPI ID AND QR CODE
        │
        ▼
-GOVERNMENT CREDENTIAL CHECK  (/api/government/verify)
+ADMIN REVIEWS  ──▶  APPROVED = PUBLICLY VISIBLE
        │
        ▼
-IMPACT INTEGRITY ENGINE  ──▶  RISK SCORE + FLAGS
+DONOR GIVES BY UPI  ──▶  CONFIRMS WITH REFERENCE  ──▶  LEDGER RECORD
        │
        ▼
-AUDITOR REVIEW  ──▶  APPROVED = PUBLICLY VISIBLE
-       │
-       ▼
-DONATIONS  ──▶  HASH-CHAINED LEDGER RECORD
-       │
-       ▼
-PUBLIC DIRECTORY, IMPACT DASHBOARD, OPEN API
+NGO UPLOADS PHOTOS  ──▶  ADMIN APPROVES  ──▶  PUBLIC GALLERY
 ```
 
 ---
@@ -147,36 +156,36 @@ PUBLIC DIRECTORY, IMPACT DASHBOARD, OPEN API
 
 Stated plainly, so the implementation is not mistaken for something it is not.
 
-- **The ledger is a hash chain, not a blockchain.** It is tamper-evident and independently
-  re-verifiable, but it runs in a single database. There are no distributed nodes, no
-  consensus mechanism and no smart contracts. This avoids the transaction cost, latency and
-  accessibility problems identified across the literature survey, at the cost of
-  decentralisation.
+- **The ledger is a hash chain, not a blockchain.** It is tamper-evident and anyone can
+  re-verify it, but it runs in a single database. There are no distributed nodes, no
+  consensus and no smart contracts. This avoids the transaction cost, latency and wallet
+  requirements that the literature identifies as blockchain's main barriers, at the cost
+  of decentralisation.
 
-- **SDG classification is rule-based**, matching keywords across all 17 goals with a
-  confidence weighting. It is not a trained language model.
+- **There is no Aadhaar OTP verification and no government API.** Verification is done by
+  a human admin reviewing the uploaded documents, which is deliberate.
 
-- **The government verification service is simulated.** It applies format and checksum rules
-  to registration numbers, PAN, 12A and 80G values. It does not call live government APIs.
+- **12A and 80G are not part of this system.**
 
-- **Documents are stored as text payloads rather than uploaded binary files.** The hashing,
-  storage and integrity-verification logic is real; only the file transport is simplified.
+- **Payments are not automated.** The donor pays by UPI outside the platform and enters
+  the reference number. A real payment gateway would replace this step.
 
-- **SQLite is used for portability.** The Prisma schema moves to PostgreSQL by changing the
-  datasource provider and connection string.
+- **SDG classification is rule-based**, matching keywords rather than using a trained
+  language model.
 
-- **Demo credentials are committed** in `server/prisma/seed.ts` for evaluation convenience.
-  Set a strong `JWT_SECRET` and remove the seed accounts before any public deployment; the
+- **Demo credentials are committed** in `server/prisma/seed.ts` for evaluation. Set a
+  strong `JWT_SECRET` and remove the seed accounts before deploying anywhere public; the
   server refuses to start in production without a real secret.
 
 ---
 
-## Configuration
+## Open data API
 
-Optional `server/.env`:
+Read-only, no key required.
 
-```
-PORT=5001
-JWT_SECRET=<at least 16 characters — required when NODE_ENV=production>
-CORS_ORIGINS=http://localhost:5173
-```
+| Endpoint | Returns |
+|---|---|
+| `GET /api/public/ngos` | Verified organisations |
+| `GET /api/public/gallery` | Approved impact photos |
+| `GET /api/public/ledger` | The donation record chain |
+| `GET /api/public/statistics` | Aggregate figures |
